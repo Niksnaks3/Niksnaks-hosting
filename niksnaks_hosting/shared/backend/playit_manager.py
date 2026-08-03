@@ -181,7 +181,7 @@ class PlayitManager(EventEmitter):
         self.config: dict[str, str] = {}
 
         self.session = requests.Session()
-        self.agent_name = f"hosty ({platform.node()})"
+        self.agent_name = f"niksnaks-hosting ({platform.node()})"
         self.agent_web_url = ""
         self.max_tunnels = 4
         self.tcp_limit = 4
@@ -815,7 +815,7 @@ class PlayitManager(EventEmitter):
         if not safe_label:
             safe_label = "server"
         safe_label = safe_label[:24]
-        tunnel_name = f"hosty-{safe_label}-{protocol}-{port}-{int(time.time()) % 100000}"
+        tunnel_name = f"niksnaks-hosting-{safe_label}-{protocol}-{port}-{int(time.time()) % 100000}"
 
         tunnel_data = {
             "name": tunnel_name,
@@ -1666,7 +1666,7 @@ class PlayitManager(EventEmitter):
         voice_tunnel = None
         if not domain or not remote_port:
             self._retrieve_tunnels()
-            label_prefix = f"hosty-{re.sub(r'[^a-zA-Z0-9-]', '-', server_id.lower())}-voicechat"
+            label_prefix = f"niksnaks-hosting-{re.sub(r'[^a-zA-Z0-9-]', '-', server_id.lower())}-voicechat"
 
             for tunnel in self.tunnels.get("udp", []):
                 if tunnel.name.startswith(label_prefix):

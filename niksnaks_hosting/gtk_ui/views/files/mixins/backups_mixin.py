@@ -19,7 +19,12 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Adw, GLib, Gtk
 
-from niksnaks_hosting.shared.backend.server_manager import ServerManager
+from niksnaks_hosting.shared.backend.server_manager import (
+    BACKUP_DIR_NAMES,
+    FULL_BACKUP_PREFIXES,
+    ServerManager,
+)
+from niksnaks_hosting.shared.utils.migration import BACKUPS_DIR, LEGACY_BACKUPS_DIR, migrate_server_dir
 
 from ..utils import *
 
@@ -29,7 +34,10 @@ class BackupsMixin:
         root = self._server_dir()
         if not root:
             return None
-        d = root / "hosty-backups"
+        d = root / BACKUPS_DIR
+        if not d.exists() and (root / LEGACY_BACKUPS_DIR).is_dir():
+            # Server directory still carries pre-rename backups; adopt them.
+            migrate_server_dir(root)
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -131,7 +139,7 @@ class BackupsMixin:
 
         # Check if it's a full backup and has a version in the filename
         version_str = ""
-        if zp.name.startswith("hosty-full-backup-"):
+        if zp.name.startswith(FULL_BACKUP_PREFIXES):
             version = ServerManager.backup_game_version(zp)
             if version:
                 version_str = _(" Version {} ·").format(version)
@@ -170,7 +178,7 @@ class BackupsMixin:
             return
 
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        zp = bdir / f"hosty-backup-{stamp}.zip"
+        zp = bdir / f"niksnaks-hosting-backup-{stamp}.zip"
         self._backup_busy = True
         if self._create_backup_row:
             self._create_backup_row.set_subtitle(_("Creating backup..."))
@@ -261,7 +269,7 @@ class BackupsMixin:
         dialog = Adw.AlertDialog()
         dialog.set_heading(_("Restore backup?"))
 
-        is_full = zp.name.startswith("hosty-full-backup-")
+        is_full = zp.name.startswith(FULL_BACKUP_PREFIXES)
         body_text = _("Restore “{}”?\n\n").format(zp.name)
         if is_full:
             body_text += _(
@@ -307,7 +315,7 @@ class BackupsMixin:
 
         def worker():
             try:
-                with tempfile.TemporaryDirectory(prefix="hosty-restore-") as td:
+                with tempfile.TemporaryDirectory(prefix="niksnaks-hosting-restore-") as td:
                     tmp_root = Path(td).resolve()
                     with zipfile.ZipFile(zp, "r") as zf:
                         for info in zf.infolist():
@@ -318,11 +326,11 @@ class BackupsMixin:
                                 raise RuntimeError("Backup archive contains invalid paths.")
                         zf.extractall(tmp_root)
 
-                    is_full = zp.name.startswith("hosty-full-backup-")
+                    is_full = zp.name.startswith(FULL_BACKUP_PREFIXES)
                     if is_full:
-                        # Nuke everything in root except hosty-backups, then copy all
+                        # Nuke everything in root except the backup folders, then copy all
                         for item in root.iterdir():
-                            if item.name == "hosty-backups":
+                            if item.name in BACKUP_DIR_NAMES:
                                 continue
                             if item.is_dir():
                                 shutil.rmtree(item, ignore_errors=True)

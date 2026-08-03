@@ -328,7 +328,7 @@ class CreateServerDialog(Adw.Dialog):
         self._progress_bar.set_show_text(True)
         self._progress_bar.set_margin_start(40)
         self._progress_bar.set_margin_end(40)
-        self._progress_bar.add_css_class("hosty-progress")
+        self._progress_bar.add_css_class("niksnaks-hosting-progress")
 
         progress_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         progress_box.append(self._progress_bar)
@@ -892,7 +892,7 @@ class CreateServerDialog(Adw.Dialog):
     def _record_optimisation_mod_install(self, server_dir: Path, version, title: str) -> None:
         import json
 
-        state_path = Path(server_dir) / ".hosty-mod-installs.json"
+        state_path = Path(server_dir) / ".niksnaks-hosting-mod-installs.json"
         try:
             if state_path.exists():
                 with open(state_path, encoding="utf-8") as f:

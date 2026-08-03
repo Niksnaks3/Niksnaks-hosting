@@ -52,7 +52,7 @@ def request_background(autostart: bool, callback: callable) -> None:
         callback(False, False, False, str(e))
         return
 
-    handle_token = f"hosty_{uuid.uuid4().hex}"
+    handle_token = f"niksnaks_hosting_{uuid.uuid4().hex}"
 
     sender_name = bus.get_unique_name()
     if not sender_name:
@@ -99,7 +99,7 @@ def request_background(autostart: bool, callback: callable) -> None:
         "handle_token": GLib.Variant("s", handle_token),
         "reason": GLib.Variant("s", "Niksnaks-Hosting can keep Minecraft servers running in the background."),
         "autostart": GLib.Variant("b", autostart),
-        "commandline": GLib.Variant("as", ["hosty", "--background"]),
+        "commandline": GLib.Variant("as", ["niksnaks-hosting", "--background"]),
     }
 
     try:

@@ -15,3 +15,8 @@ modules:
     sources:
       - type: dir
         path: ../../
+        skip:
+          - .git
+          - build
+          - dist
+          - __pycache__

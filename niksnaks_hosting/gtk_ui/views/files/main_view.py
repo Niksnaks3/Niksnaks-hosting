@@ -76,7 +76,7 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, W
         root_content = self._build_root_content()
         self._root_page = Adw.NavigationPage(title=_("Files"), child=root_content)
         try:
-            self._root_page.set_tag("hosty-files-root")
+            self._root_page.set_tag("niksnaks-hosting-files-root")
         except Exception:
             pass
         self._nav.push(self._root_page)
@@ -177,7 +177,7 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, W
         if not self._root_page:
             return
         try:
-            self._nav.pop_to_tag("hosty-files-root")
+            self._nav.pop_to_tag("niksnaks-hosting-files-root")
         except Exception:
             for _ in range(24):
                 if self._nav.get_visible_page() == self._root_page:
@@ -512,7 +512,7 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, W
         root = self._server_dir()
         if not root:
             return None
-        d = root / ".hosty-trash"
+        d = root / ".niksnaks-hosting-trash"
         d.mkdir(parents=True, exist_ok=True)
         return d
 

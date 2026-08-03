@@ -1,5 +1,5 @@
 """
-HostyApplication - Main Adw.Application subclass.
+NiksnaksHostingApplication - Main Adw.Application subclass.
 Handles app lifecycle, actions, CSS loading, and dialog management.
 """
 
@@ -14,14 +14,14 @@ from pathlib import Path
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
-from niksnaks_hosting.gtk_ui.window import HostyWindow
+from niksnaks_hosting.gtk_ui.window import NiksnaksHostingWindow
 from niksnaks_hosting.i18n import set_language, setup_gettext
 from niksnaks_hosting.shared.backend.server_manager import ServerManager
 from niksnaks_hosting.shared.core.events import set_main_thread_dispatcher
 from niksnaks_hosting.shared.utils.constants import APP_ID
 
 
-class HostyApplication(Adw.Application):
+class NiksnaksHostingApplication(Adw.Application):
     """Main Niksnaks-Hosting application."""
 
     def __init__(self):
@@ -128,7 +128,7 @@ class HostyApplication(Adw.Application):
 
             # Start background services but don't show the window yet
             if not self._window:
-                self._window = HostyWindow(
+                self._window = NiksnaksHostingWindow(
                     server_manager=self._server_manager,
                     application=self,
                 )
@@ -136,7 +136,7 @@ class HostyApplication(Adw.Application):
             return
 
         if not self._window:
-            self._window = HostyWindow(
+            self._window = NiksnaksHostingWindow(
                 server_manager=self._server_manager,
                 application=self,
             )

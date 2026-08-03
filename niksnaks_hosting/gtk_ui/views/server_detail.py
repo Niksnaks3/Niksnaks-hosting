@@ -56,7 +56,7 @@ class ServerDetailView(Gtk.Box):
         self._outer_nav.set_vexpand(True)
         self._outer_nav_root = Adw.NavigationPage(title=_("Server Detail"), child=self._toolbar_view)
         try:
-            self._outer_nav_root.set_tag("hosty-detail-root")
+            self._outer_nav_root.set_tag("niksnaks-hosting-detail-root")
         except Exception:
             pass
         self._outer_nav.push(self._outer_nav_root)
@@ -181,7 +181,7 @@ class ServerDetailView(Gtk.Box):
         """Load a server's details into the view."""
         # Pop any fullscreen overlay pages (like Modrinth) back to root
         try:
-            self._outer_nav.pop_to_tag("hosty-detail-root")
+            self._outer_nav.pop_to_tag("niksnaks-hosting-detail-root")
         except Exception:
             pass
 
@@ -268,7 +268,7 @@ class ServerDetailView(Gtk.Box):
 
     def _update_toggle_for_selected(self, status: str):
         """Update Start/Stop from the sidebar-selected server's process."""
-        self._toggle_btn.remove_css_class("hosty-starting-button")
+        self._toggle_btn.remove_css_class("niksnaks-hosting-starting-button")
         selected_id = self._current_server.id if self._current_server else ""
         mods_busy = bool(selected_id) and self._server_manager.is_mod_operation_active(selected_id)
 
@@ -276,7 +276,7 @@ class ServerDetailView(Gtk.Box):
             self._toggle_btn.set_label(_("Starting"))
             self._toggle_btn.remove_css_class("suggested-action")
             self._toggle_btn.remove_css_class("destructive-action")
-            self._toggle_btn.add_css_class("hosty-starting-button")
+            self._toggle_btn.add_css_class("niksnaks-hosting-starting-button")
             self._toggle_btn.set_sensitive(False)
             self._toggle_btn.set_tooltip_text(_("Wait for the server to finish starting"))
             return

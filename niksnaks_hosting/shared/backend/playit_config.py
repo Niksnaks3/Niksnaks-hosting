@@ -23,7 +23,7 @@ DEFAULT_PLAYIT_CONFIG = {
 
 def playit_config_path(server_dir: str | Path) -> Path:
     root = Path(server_dir)
-    return root / ".hosty-playit.json"
+    return root / ".niksnaks-hosting-playit.json"
 
 
 def load_playit_config(server_dir: str | Path) -> dict:

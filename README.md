@@ -71,6 +71,55 @@ Conda is also supported if the environment includes `pygobject` and `gtk4`.
 
 </details>
 
+<details>
+<summary>Build the Windows installer</summary>
+
+The Windows installer is a PyInstaller bundle (app + GTK4/libadwaita runtime) wrapped with Inno Setup.
+
+1. Install the toolchain:
+
+```powershell
+winget install MSYS2.MSYS2
+winget install JRSoftware.InnoSetup
+```
+
+2. From an MSYS2 **UCRT64** shell, install the build dependencies:
+
+```bash
+pacman -S --needed mingw-w64-ucrt-x86_64-gtk4 mingw-w64-ucrt-x86_64-libadwaita mingw-w64-ucrt-x86_64-python mingw-w64-ucrt-x86_64-python-gobject mingw-w64-ucrt-x86_64-python-requests mingw-w64-ucrt-x86_64-python-psutil mingw-w64-ucrt-x86_64-python-pillow mingw-w64-ucrt-x86_64-librsvg mingw-w64-ucrt-x86_64-adwaita-icon-theme mingw-w64-ucrt-x86_64-python-pip
+python -m pip install --break-system-packages pyinstaller
+```
+
+3. Build:
+
+```bash
+./packaging/windows/build.sh
+```
+
+This writes `dist/Niksnaks-Hosting/` (portable folder) and `dist/Niksnaks-Hosting-<version>-Setup.exe`.
+
+Set `NIKSNAKS_CONSOLE=1` before building to get a console window for debugging startup errors.
+
+</details>
+
+<details>
+<summary>Build the Linux Flatpak bundle</summary>
+
+Requires Linux (or WSL) with `flatpak` and `flatpak-builder`:
+
+```bash
+sudo apt install flatpak flatpak-builder   # or: sudo dnf install flatpak flatpak-builder
+./packaging/flatpak/build.sh
+```
+
+This writes `dist/Niksnaks-Hosting-<version>.flatpak`, installable with:
+
+```bash
+flatpak install --user ./dist/Niksnaks-Hosting-<version>.flatpak
+```
+
+</details>
+
 ## Demo
 
 

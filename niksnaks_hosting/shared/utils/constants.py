@@ -23,16 +23,18 @@ def _default_data_dir() -> Path:
     if sys.platform == "win32":
         local_app_data = os.environ.get("LOCALAPPDATA")
         if local_app_data:
-            return Path(local_app_data) / "Hosty"
-        return Path.home() / "AppData" / "Local" / "Hosty"
+            return Path(local_app_data) / "Niksnaks-Hosting"
+        return Path.home() / "AppData" / "Local" / "Niksnaks-Hosting"
 
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "Hosty"
+        return Path.home() / "Library" / "Application Support" / "Niksnaks-Hosting"
 
-    return Path.home() / ".local" / "share" / "hosty"
+    return Path.home() / ".local" / "share" / "niksnaks-hosting"
 
 
-DATA_DIR = Path(os.environ.get("HOSTY_DATA_DIR", _default_data_dir()))
+_DATA_DIR_OVERRIDE = os.environ.get("NIKSNAKS_HOSTING_DATA_DIR")
+
+DATA_DIR = Path(_DATA_DIR_OVERRIDE or _default_data_dir())
 SERVERS_DIR = DATA_DIR / "servers"
 JRES_DIR = DATA_DIR / "jres"
 CACHE_DIR = DATA_DIR / "cache"
@@ -41,6 +43,16 @@ CONFIG_FILE = DATA_DIR / "servers.json"
 # Ensure directories exist
 for d in [DATA_DIR, SERVERS_DIR, JRES_DIR, CACHE_DIR]:
     d.mkdir(parents=True, exist_ok=True)
+
+# Adopt data left in the pre-rename location, before anything reads CONFIG_FILE.
+# Skipped when the directory was chosen explicitly, since that is not an upgrade.
+if not _DATA_DIR_OVERRIDE:
+    try:
+        from niksnaks_hosting.shared.utils.migration import migrate_legacy_data
+
+        migrate_legacy_data(DATA_DIR)
+    except Exception:  # never block startup on a migration problem
+        pass
 
 # Fabric Meta API
 FABRIC_META_BASE = "https://meta.fabricmc.net/v2/versions"

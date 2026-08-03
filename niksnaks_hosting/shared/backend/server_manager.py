@@ -30,6 +30,14 @@ from niksnaks_hosting.shared.utils.constants import (
     get_loader_display_name,
     normalize_loader,
 )
+from niksnaks_hosting.shared.utils.migration import BACKUPS_DIR, LEGACY_BACKUPS_DIR
+
+# Backups written before the app was renamed keep their old names when migration
+# could not rename them (server on another drive, file locked, ...). Reading and
+# restoring must still recognise them, and a full restore must never wipe them.
+BACKUP_DIR_NAMES = (BACKUPS_DIR, LEGACY_BACKUPS_DIR)
+FULL_BACKUP_PREFIXES = ("niksnaks-hosting-full-backup-", "hosty-full-backup-")
+FULL_BACKUP_NAME_RE = r"^(?:niksnaks-hosting|hosty)-full-backup-(.+)-\d{8}-\d{6}\.zip$"
 
 
 class ServerInfo:
@@ -43,7 +51,10 @@ class ServerInfo:
         # stored; default to Fabric so they keep working unchanged.
         self.loader_type: str = normalize_loader(data.get("loader_type", LOADER_FABRIC))
         self.loader_version: str = data.get("loader_version", "")
-        self.ram_mb: int = data.get("ram_mb", DEFAULT_RAM_MB)
+        # A stored zero (seen after an interrupted create) survives .get(), and would
+        # both launch java with -Xmx0M and pin the memory graph to zero.
+        stored_ram = int(data.get("ram_mb") or 0)
+        self.ram_mb: int = stored_ram if stored_ram > 0 else DEFAULT_RAM_MB
         self.java_version: int = data.get("java_version", 21)
         self.jvm_args: str = data.get("jvm_args", "")
         self.icon_path: str = data.get("icon_path", "")
@@ -479,19 +490,19 @@ class ServerManager(EventEmitter):
         return cls.version_sort_key(candidate) > cls.version_sort_key(current)
 
     def _tracked_mod_state(self, root: Path) -> dict:
-        data = self._json_file(root / ".hosty-mod-installs.json")
+        data = self._json_file(root / ".niksnaks-hosting-mod-installs.json")
         return data.get("mods") if isinstance(data.get("mods"), dict) else {}
 
     def _tracked_modpack_state(self, root: Path) -> dict:
-        data = self._json_file(root / ".hosty-modpacks.json")
+        data = self._json_file(root / ".niksnaks-hosting-modpacks.json")
         return data.get("installed_projects") if isinstance(data.get("installed_projects"), dict) else {}
 
     def _tracked_datapack_state(self, root: Path) -> dict:
-        data = self._json_file(root / ".hosty-datapack-installs.json")
+        data = self._json_file(root / ".niksnaks-hosting-datapack-installs.json")
         return data.get("datapacks") if isinstance(data.get("datapacks"), dict) else {}
 
     def _tracked_mod_dependency_state(self, root: Path) -> dict[str, list[str]]:
-        data = self._json_file(root / ".hosty-mod-dependencies.json")
+        data = self._json_file(root / ".niksnaks-hosting-mod-dependencies.json")
         req = data.get("required_by") if isinstance(data.get("required_by"), dict) else {}
         cleaned: dict[str, list[str]] = {}
         for dep_name, parents in req.items():
@@ -514,7 +525,7 @@ class ServerManager(EventEmitter):
             if Path(str(dep)).name and parents
         }
         cleaned = {dep: parents for dep, parents in cleaned.items() if parents}
-        self._write_json_file(root / ".hosty-mod-dependencies.json", {"required_by": cleaned})
+        self._write_json_file(root / ".niksnaks-hosting-mod-dependencies.json", {"required_by": cleaned})
 
     def _replace_mod_dependency_parent(
         self,
@@ -696,7 +707,7 @@ class ServerManager(EventEmitter):
             if Path(str((meta or {}).get("filename", ""))).name.casefold() != name
         }
         if kept_mods != mods:
-            self._write_json_file(root / ".hosty-mod-installs.json", {"mods": kept_mods})
+            self._write_json_file(root / ".niksnaks-hosting-mod-installs.json", {"mods": kept_mods})
 
         packs = self._tracked_modpack_state(root)
         changed = False
@@ -709,7 +720,7 @@ class ServerManager(EventEmitter):
                 meta["mods"] = new_mods
                 changed = True
         if changed:
-            self._write_json_file(root / ".hosty-modpacks.json", {"installed_projects": packs})
+            self._write_json_file(root / ".niksnaks-hosting-modpacks.json", {"installed_projects": packs})
 
     def apply_compatible_component_updates(
         self, server_id: str, target_mc_version: str, plan: dict | None = None, loader_type: str | None = None
@@ -774,7 +785,7 @@ class ServerManager(EventEmitter):
                     "title": str(entry.get("title", "")),
                     "mods": sorted(new_mods),
                 }
-                self._write_json_file(root / ".hosty-modpacks.json", {"installed_projects": pack_state})
+                self._write_json_file(root / ".niksnaks-hosting-modpacks.json", {"installed_projects": pack_state})
                 applied += 1
             except Exception:
                 failed += 1
@@ -831,7 +842,7 @@ class ServerManager(EventEmitter):
                     "version_number": str(entry.get("version_number", "")),
                     "filename": filename,
                 }
-                self._write_json_file(root / ".hosty-mod-installs.json", {"mods": mod_state})
+                self._write_json_file(root / ".niksnaks-hosting-mod-installs.json", {"mods": mod_state})
                 applied += 1
             except Exception:
                 failed += 1
@@ -857,7 +868,7 @@ class ServerManager(EventEmitter):
                     "version_number": str(entry.get("version_number", "")),
                     "filename": filename,
                 }
-                self._write_json_file(root / ".hosty-datapack-installs.json", {"datapacks": dp_state})
+                self._write_json_file(root / ".niksnaks-hosting-datapack-installs.json", {"datapacks": dp_state})
                 applied += 1
             except Exception:
                 failed += 1
@@ -884,7 +895,7 @@ class ServerManager(EventEmitter):
         incompatible = plan.get("incompatible") if isinstance(plan.get("incompatible"), dict) else {}
         record: dict[str, list[dict[str, str]]] = {"mods": [], "modpacks": [], "datapacks": []}
 
-        mod_state_path = root / ".hosty-mod-installs.json"
+        mod_state_path = root / ".niksnaks-hosting-mod-installs.json"
         mods = self._tracked_mod_state(root)
         kept_mods = dict(mods)
         for entry in incompatible.get("mods", []) or []:
@@ -901,7 +912,7 @@ class ServerManager(EventEmitter):
         if kept_mods != mods:
             self._write_json_file(mod_state_path, {"mods": kept_mods})
 
-        pack_state_path = root / ".hosty-modpacks.json"
+        pack_state_path = root / ".niksnaks-hosting-modpacks.json"
         packs = self._tracked_modpack_state(root)
         kept_packs = dict(packs)
         for entry in incompatible.get("modpacks", []) or []:
@@ -919,7 +930,7 @@ class ServerManager(EventEmitter):
         if kept_packs != packs:
             self._write_json_file(pack_state_path, {"installed_projects": kept_packs})
 
-        dp_state_path = root / ".hosty-datapack-installs.json"
+        dp_state_path = root / ".niksnaks-hosting-datapack-installs.json"
         datapacks = self._tracked_datapack_state(root)
         kept_datapacks = dict(datapacks)
         for entry in incompatible.get("datapacks", []) or []:
@@ -939,14 +950,14 @@ class ServerManager(EventEmitter):
         if any(record.values()):
             previous = self.get_incompatible_components(server_id)
             merged = {key: [*previous.get(key, []), *record.get(key, [])] for key in ("mods", "modpacks", "datapacks")}
-            self._write_json_file(root / ".hosty-incompatible-components.json", merged)
+            self._write_json_file(root / ".niksnaks-hosting-incompatible-components.json", merged)
         return record
 
     def get_incompatible_components(self, server_id: str) -> dict[str, list[dict[str, str]]]:
         info = self._servers.get(server_id)
         if not info:
             return {"mods": [], "modpacks": [], "datapacks": []}
-        data = self._json_file(info.server_dir / ".hosty-incompatible-components.json")
+        data = self._json_file(info.server_dir / ".niksnaks-hosting-incompatible-components.json")
         out: dict[str, list[dict[str, str]]] = {}
         for key in ("mods", "modpacks", "datapacks"):
             values = data.get(key) if isinstance(data.get(key), list) else []
@@ -980,7 +991,7 @@ class ServerManager(EventEmitter):
 
         root = info.server_dir
         disabled_dir = root / ("datapacks_incompatible" if key == "datapacks" else "mods_incompatible")
-        data_path = root / ".hosty-incompatible-components.json"
+        data_path = root / ".niksnaks-hosting-incompatible-components.json"
         data = self.get_incompatible_components(server_id)
         records = data.get(key, [])
         project_id = str(project_id or "").strip()
@@ -1023,7 +1034,7 @@ class ServerManager(EventEmitter):
     @staticmethod
     def backup_game_version(zip_path: Path) -> str:
         name = Path(zip_path).name
-        match = re.match(r"^hosty-full-backup-(.+)-\d{8}-\d{6}\.zip$", name)
+        match = re.match(FULL_BACKUP_NAME_RE, name)
         return match.group(1) if match else ""
 
     @staticmethod
@@ -1621,11 +1632,11 @@ class ServerManager(EventEmitter):
         if not worlds:
             return False, _("No world folder found")
 
-        backups_dir = root / "hosty-backups"
+        backups_dir = root / BACKUPS_DIR
         backups_dir.mkdir(parents=True, exist_ok=True)
 
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        prefix = "hosty-auto-backup" if auto else "hosty-backup"
+        prefix = "niksnaks-hosting-auto-backup" if auto else "niksnaks-hosting-backup"
         backup_path = backups_dir / f"{prefix}-{stamp}.zip"
 
         try:
@@ -1657,14 +1668,14 @@ class ServerManager(EventEmitter):
         if not root.exists():
             return False, _("Server directory does not exist")
 
-        backups_dir = root / "hosty-backups"
+        backups_dir = root / BACKUPS_DIR
         backups_dir.mkdir(parents=True, exist_ok=True)
 
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
         # Tag the backup with the current server version
         version = info.mc_version if info.mc_version else "unknown"
-        backup_path = backups_dir / f"hosty-full-backup-{version}-{stamp}.zip"
+        backup_path = backups_dir / f"niksnaks-hosting-full-backup-{version}-{stamp}.zip"
 
         try:
             with zipfile.ZipFile(backup_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -1692,7 +1703,7 @@ class ServerManager(EventEmitter):
         info = self.get_server(server_id)
         if not info:
             return
-        backups_dir = info.server_dir / "hosty-backups"
+        backups_dir = info.server_dir / BACKUPS_DIR
         if not backups_dir.exists():
             return
         cutoff = datetime.now(timezone.utc) - timedelta(days=30)  # noqa: UP017
@@ -1727,10 +1738,10 @@ class ServerManager(EventEmitter):
         if not zip_path.exists():
             return False, _("Backup file not found")
 
-        is_full = zip_path.name.startswith("hosty-full-backup-")
+        is_full = zip_path.name.startswith(FULL_BACKUP_PREFIXES)
 
         try:
-            with tempfile.TemporaryDirectory(prefix="hosty-restore-") as td:
+            with tempfile.TemporaryDirectory(prefix="niksnaks-hosting-restore-") as td:
                 tmp_root = Path(td).resolve()
                 with zipfile.ZipFile(zip_path, "r") as zf:
                     for zi in zf.infolist():
@@ -1742,9 +1753,9 @@ class ServerManager(EventEmitter):
                     zf.extractall(tmp_root)
 
                 if is_full:
-                    # Nuke everything in root except hosty-backups, then copy all
+                    # Nuke everything in root except the backup folders, then copy all
                     for item in root.iterdir():
-                        if item.name == "hosty-backups":
+                        if item.name in BACKUP_DIR_NAMES:
                             continue
                         if item.is_dir():
                             shutil.rmtree(item, ignore_errors=True)

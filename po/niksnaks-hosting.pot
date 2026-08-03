@@ -2477,7 +2477,7 @@ msgid "Message of the Day"
 msgstr ""
 
 #: niksnaks_hosting/gtk_ui/views/properties_view.py:78
-msgid "a hosty server"
+msgid "a niksnaks-hosting server"
 msgstr ""
 
 #: niksnaks_hosting/gtk_ui/views/properties_view.py:80

@@ -1,5 +1,5 @@
 """
-HostyWindow - Main application window with NavigationSplitView.
+NiksnaksHostingWindow - Main application window with NavigationSplitView.
 """
 
 import threading
@@ -18,7 +18,7 @@ from niksnaks_hosting.shared.backend.server_manager import ServerManager
 from niksnaks_hosting.shared.utils.constants import APP_ID
 
 
-class HostyWindow(Adw.ApplicationWindow):
+class NiksnaksHostingWindow(Adw.ApplicationWindow):
     """Main Niksnaks-Hosting application window."""
 
     def __init__(self, server_manager: ServerManager, **kwargs):
@@ -37,7 +37,7 @@ class HostyWindow(Adw.ApplicationWindow):
             pass
         self.set_default_size(1000, 700)
         self.set_size_request(400, 400)
-        self.add_css_class("hosty-window")
+        self.add_css_class("niksnaks-hosting-window")
 
         # Toast overlay wraps everything
         self._toast_overlay = Adw.ToastOverlay()

@@ -15,6 +15,7 @@ import sys
 import threading
 from pathlib import Path
 
+import gi
 from gi.repository import GLib
 
 kernel32 = ctypes.windll.kernel32
@@ -122,7 +123,10 @@ WNDPROC = ctypes.WINFUNCTYPE(
     LPARAM,
 )
 
-# Tell ctypes about DefWindowProcW's signature so it doesn't truncate arguments
+# ctypes defaults every undeclared function to a 32-bit int return value, which
+# silently truncates the 64-bit handles and pointers the Win32 API hands back.
+# A truncated HINSTANCE or HBRUSH makes RegisterClassExW read garbage and fault,
+# so every function used here declares its real signature.
 user32.DefWindowProcW.argtypes = [
     ctypes.wintypes.HWND,
     ctypes.wintypes.UINT,
@@ -130,6 +134,92 @@ user32.DefWindowProcW.argtypes = [
     LPARAM,
 ]
 user32.DefWindowProcW.restype = ctypes.c_ssize_t
+
+kernel32.GetModuleHandleW.argtypes = [ctypes.wintypes.LPCWSTR]
+kernel32.GetModuleHandleW.restype = HINSTANCE
+
+user32.GetSysColorBrush.argtypes = [ctypes.c_int]
+user32.GetSysColorBrush.restype = HBRUSH
+
+user32.RegisterClassExW.argtypes = [ctypes.c_void_p]
+user32.RegisterClassExW.restype = ctypes.wintypes.ATOM
+
+user32.CreateWindowExW.argtypes = [
+    ctypes.wintypes.DWORD,
+    ctypes.wintypes.LPCWSTR,
+    ctypes.wintypes.LPCWSTR,
+    ctypes.wintypes.DWORD,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.wintypes.HWND,
+    HMENU,
+    HINSTANCE,
+    ctypes.c_void_p,
+]
+user32.CreateWindowExW.restype = ctypes.wintypes.HWND
+
+user32.LoadImageW.argtypes = [
+    HINSTANCE,
+    ctypes.wintypes.LPCWSTR,
+    ctypes.wintypes.UINT,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.wintypes.UINT,
+]
+user32.LoadImageW.restype = HANDLE
+
+user32.DestroyIcon.argtypes = [HICON]
+user32.DestroyIcon.restype = ctypes.wintypes.BOOL
+
+user32.CreatePopupMenu.argtypes = []
+user32.CreatePopupMenu.restype = HMENU
+
+user32.DestroyMenu.argtypes = [HMENU]
+user32.DestroyMenu.restype = ctypes.wintypes.BOOL
+
+user32.AppendMenuW.argtypes = [HMENU, ctypes.wintypes.UINT, WPARAM, ctypes.wintypes.LPCWSTR]
+user32.AppendMenuW.restype = ctypes.wintypes.BOOL
+
+user32.SetMenuDefaultItem.argtypes = [HMENU, ctypes.wintypes.UINT, ctypes.wintypes.UINT]
+user32.SetMenuDefaultItem.restype = ctypes.wintypes.BOOL
+
+user32.TrackPopupMenu.argtypes = [
+    HMENU,
+    ctypes.wintypes.UINT,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.wintypes.HWND,
+    ctypes.c_void_p,
+]
+user32.TrackPopupMenu.restype = ctypes.wintypes.BOOL
+
+user32.SetForegroundWindow.argtypes = [ctypes.wintypes.HWND]
+user32.SetForegroundWindow.restype = ctypes.wintypes.BOOL
+
+user32.GetCursorPos.argtypes = [ctypes.c_void_p]
+user32.GetCursorPos.restype = ctypes.wintypes.BOOL
+
+user32.PostMessageW.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.UINT, WPARAM, LPARAM]
+user32.PostMessageW.restype = ctypes.wintypes.BOOL
+
+# GetMessageW returns -1 on error, so the result must stay signed.
+user32.GetMessageW.argtypes = [ctypes.c_void_p, ctypes.wintypes.HWND, ctypes.wintypes.UINT, ctypes.wintypes.UINT]
+user32.GetMessageW.restype = ctypes.c_int
+
+user32.TranslateMessage.argtypes = [ctypes.c_void_p]
+user32.TranslateMessage.restype = ctypes.wintypes.BOOL
+
+user32.DispatchMessageW.argtypes = [ctypes.c_void_p]
+user32.DispatchMessageW.restype = ctypes.c_ssize_t
+
+user32.PostQuitMessage.argtypes = [ctypes.c_int]
+user32.PostQuitMessage.restype = None
+
+shell32.Shell_NotifyIconW.argtypes = [ctypes.wintypes.DWORD, ctypes.c_void_p]
+shell32.Shell_NotifyIconW.restype = ctypes.wintypes.BOOL
 
 
 class WindowsTrayManager:
@@ -179,7 +269,7 @@ class WindowsTrayManager:
     def _thread_main(self) -> None:
         """Thread entry: register window class, create window, add icon, run loop."""
         module = kernel32.GetModuleHandleW(None)
-        class_name = f"HostyTray_{threading.get_native_id()}"
+        class_name = f"NiksnaksHostingTray_{threading.get_native_id()}"
 
         self._wndproc = WNDPROC(self._wnd_proc)
 
@@ -219,7 +309,7 @@ class WindowsTrayManager:
         self._hwnd = user32.CreateWindowExW(
             0,
             class_name,
-            "HostyTray",
+            "NiksnaksHostingTray",
             WS_OVERLAPPED,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
@@ -347,6 +437,7 @@ class WindowsTrayManager:
     def _build_icon_pil(self) -> object | None:
         """Try loading the Niksnaks-Hosting SVG icon via GdkPixbuf; fall back to drawing."""
         try:
+            gi.require_version("GdkPixbuf", "2.0")
             from gi.repository import GdkPixbuf
 
             svg_path = self._find_svg_path()

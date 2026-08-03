@@ -18,16 +18,16 @@
     margin: 0;
 }
 
-button.hosty-starting-button,
-button.hosty-starting-button:disabled {
+button.niksnaks-hosting-starting-button,
+button.niksnaks-hosting-starting-button:disabled {
     background-color: alpha(#e5a50a, 0.14);
     border-color: alpha(#e5a50a, 0.4);
     color: #e5a50a;
     opacity: 1;
 }
 
-button.hosty-starting-button:hover,
-button.hosty-starting-button:active {
+button.niksnaks-hosting-starting-button:hover,
+button.niksnaks-hosting-starting-button:active {
     background-color: alpha(#e5a50a, 0.20);
 }
 

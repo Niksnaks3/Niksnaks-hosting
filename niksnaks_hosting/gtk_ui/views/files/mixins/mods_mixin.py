@@ -48,25 +48,25 @@ class ModsMixin:
         root = self._server_dir()
         if not root:
             return None
-        return root / ".hosty-mod-dependencies.json"
+        return root / ".niksnaks-hosting-mod-dependencies.json"
 
     def _modpack_state_path(self) -> Path | None:
         root = self._server_dir()
         if not root:
             return None
-        return root / ".hosty-modpacks.json"
+        return root / ".niksnaks-hosting-modpacks.json"
 
     def _individual_mod_state_path(self) -> Path | None:
         root = self._server_dir()
         if not root:
             return None
-        return root / ".hosty-mod-installs.json"
+        return root / ".niksnaks-hosting-mod-installs.json"
 
     def _datapack_state_path(self) -> Path | None:
         root = self._server_dir()
         if not root:
             return None
-        return root / ".hosty-datapack-installs.json"
+        return root / ".niksnaks-hosting-datapack-installs.json"
 
     def _datapacks_dir(self) -> Path | None:
         """Return the active datapacks directory (world/datapacks), creating parent if needed."""

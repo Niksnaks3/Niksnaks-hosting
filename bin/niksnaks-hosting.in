@@ -9,17 +9,17 @@ xdg_data_home = os.environ.get("XDG_DATA_HOME")
 if not xdg_data_home:
     xdg_data_home = os.path.join(os.path.expanduser("~"), ".local", "share")
 
-hosty_data_dir = os.environ.get("HOSTY_DATA_DIR")
-if not hosty_data_dir:
-    hosty_data_dir = os.path.join(xdg_data_home, "hosty")
+niksnaks_hosting_data_dir = os.environ.get("NIKSNAKS_HOSTING_DATA_DIR")
+if not niksnaks_hosting_data_dir:
+    niksnaks_hosting_data_dir = os.path.join(xdg_data_home, "niksnaks-hosting")
 
-os.environ["HOSTY_DATA_DIR"] = hosty_data_dir
+os.environ["NIKSNAKS_HOSTING_DATA_DIR"] = niksnaks_hosting_data_dir
 
 # Create the data dir if it does not exist
 try:
-    os.makedirs(hosty_data_dir, exist_ok=True)
+    os.makedirs(niksnaks_hosting_data_dir, exist_ok=True)
 except Exception as e:
-    print(f"Warning: Could not create data directory {hosty_data_dir}: {e}", file=sys.stderr)
+    print(f"Warning: Could not create data directory {niksnaks_hosting_data_dir}: {e}", file=sys.stderr)
 
 # Set up the path to find the niksnaks_hosting package
 pkgdatadir = '@pkgdatadir@'

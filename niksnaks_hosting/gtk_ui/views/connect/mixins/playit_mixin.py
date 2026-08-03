@@ -224,7 +224,7 @@ class PlayitMixin:
             self._tunnel_btn.set_label(_("Start Agent"))
             self._tunnel_btn.remove_css_class("destructive-action")
             self._tunnel_btn.add_css_class("suggested-action")
-            self._tunnel_btn.remove_css_class("hosty-starting-button")
+            self._tunnel_btn.remove_css_class("niksnaks-hosting-starting-button")
             return
 
         playit = self._server_manager.playit_manager
@@ -377,12 +377,12 @@ class PlayitMixin:
         if self._start_in_progress:
             self._tunnel_btn.set_label(_("Starting..."))
             self._tunnel_btn.set_sensitive(False)
-            self._tunnel_btn.add_css_class("hosty-starting-button")
+            self._tunnel_btn.add_css_class("niksnaks-hosting-starting-button")
         elif self._java_tunnel_in_progress or self._bedrock_in_progress or self._voicechat_in_progress:
             self._tunnel_btn.set_sensitive(False)
-            self._tunnel_btn.remove_css_class("hosty-starting-button")
+            self._tunnel_btn.remove_css_class("niksnaks-hosting-starting-button")
         else:
-            self._tunnel_btn.remove_css_class("hosty-starting-button")
+            self._tunnel_btn.remove_css_class("niksnaks-hosting-starting-button")
 
     def _on_playit_status_changed(self, *_args):
         self._refresh_status_row()
@@ -1097,7 +1097,7 @@ class PlayitMixin:
     def _record_tunnel_installed_mod(self, project_id: str, title: str, version) -> None:
         if not self._server_info:
             return
-        state_path = self._server_info.server_dir / ".hosty-mod-installs.json"
+        state_path = self._server_info.server_dir / ".niksnaks-hosting-mod-installs.json"
         try:
             data = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
             mods = data.get("mods") if isinstance(data.get("mods"), dict) else {}
@@ -1117,7 +1117,7 @@ class PlayitMixin:
         parent_key = str(parent_filename or "").strip().lower()
         if not parent_key:
             return
-        state_path = self._server_info.server_dir / ".hosty-mod-dependencies.json"
+        state_path = self._server_info.server_dir / ".niksnaks-hosting-mod-dependencies.json"
         try:
             data = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
             req = data.get("required_by") if isinstance(data.get("required_by"), dict) else {}
@@ -1252,7 +1252,7 @@ class PlayitMixin:
                     if warnings:
                         warn = Adw.AlertDialog()
                         warn.set_heading(_("Some mods were not installed"))
-                        warn.set_body(_("{}\n\nHosty will create the tunnel anyway.").format("\n".join(warnings)))
+                        warn.set_body(_("{}\n\nNiksnaks-Hosting will create the tunnel anyway.").format("\n".join(warnings)))
                         warn.add_response("ok", _("OK"))
                         warn.set_default_response("ok")
                         warn.set_close_response("ok")

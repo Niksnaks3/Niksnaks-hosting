@@ -74,7 +74,7 @@ class ConsoleView(Gtk.Box):
 
     def _create_tags(self):
         """Create text tags for console output coloring."""
-        self._tag_hosty = self._buffer.create_tag("hosty", foreground="#7c6bf0", weight=Pango.Weight.BOLD)
+        self._tag_niksnaks_hosting = self._buffer.create_tag("niksnaks-hosting", foreground="#7c6bf0", weight=Pango.Weight.BOLD)
         self._tag_info = self._buffer.create_tag("info", foreground="#7aa2f7")
         self._tag_warn = self._buffer.create_tag("warn", foreground="#e0af68")
         self._tag_error = self._buffer.create_tag("error", foreground="#f7768e")
@@ -104,7 +104,7 @@ class ConsoleView(Gtk.Box):
         # Determine tag based on content
         tag = None
         if text.startswith("[Niksnaks-Hosting]"):
-            tag = self._tag_hosty
+            tag = self._tag_niksnaks_hosting
         elif "WARN" in text:
             tag = self._tag_warn
         elif "ERROR" in text or "Exception" in text:
