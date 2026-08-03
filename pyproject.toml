@@ -1,0 +1,21 @@
+[project]
+name = "niksnaks-hosting"
+version = "1.7.7"
+requires-python = ">=3.13"
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"niksnaks_hosting/gtk_ui/**/*.py" = ["E402", "F403", "F405", "F821"]
+"niksnaks_hosting/shared/**/*.py" = ["F821"]
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
+warn_unused_ignores = true

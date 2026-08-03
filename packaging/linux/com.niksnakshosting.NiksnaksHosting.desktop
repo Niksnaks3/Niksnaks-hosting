@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Niksnaks-Hosting
+Comment=Fabric Minecraft server manager
+Exec=niksnaks-hosting
+Icon=com.niksnakshosting.NiksnaksHosting
+Terminal=false
+Categories=Utility;Game;
+Keywords=minecraft;server;fabric;modrinth;java;hosting;multiplayer;mc;
+StartupNotify=true

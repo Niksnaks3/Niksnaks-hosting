@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.niksnakshosting.NiksnaksHosting</id>
+  <name>Niksnaks-Hosting</name>
+  <summary>Host Minecraft servers</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <developer id="com.niksnakshosting">
+    <name>Sugarycandybar</name>
+  </developer>
+  <update_contact>candybaralt@gmail.com</update_contact>
+  <description>
+    <p>
+      Niksnaks-Hosting simplifies the process of creating and managing Minecraft servers on Linux.
+      It removes technical barriers by automating the installation of necessary server 
+      files and handling the required Java runtimes for you.
+    </p>
+    <ul>
+      <li>Built-in Modrinth browser for easy discovery and mod installation</li>
+      <li>Integrated Playit support for hosting without manual port forwarding</li>
+      <li>Graphical interface for viewing performance and editing server properties</li>
+      <li>Dedicated tools to create and restore server backups</li>
+    </ul>
+  </description>
+  <categories>
+    <category>Utility</category>
+    <category>Game</category>
+  </categories>
+  <keywords>
+    <keyword>minecraft</keyword>
+    <keyword>server</keyword>
+    <keyword>fabric</keyword>
+    <keyword>modrinth</keyword>
+    <keyword>java</keyword>
+    <keyword>hosting</keyword>
+    <keyword>multiplayer</keyword>
+    <keyword>mc</keyword>
+  </keywords>
+  <branding>
+    <color type="primary" scheme_preference="light">#e8f5e9</color>
+    <color type="primary" scheme_preference="dark">#2a3b30</color>
+  </branding>
+  <launchable type="desktop-id">com.niksnakshosting.NiksnaksHosting.desktop</launchable>
+  <releases>
+    <release version="1.7.8" date="2026-07-25">
+      <description>
+        <p>Minor bug fixes and improvements:</p>
+        <ul>
+          <li>Added offline mode toggle</li>
+          <li>Fixed world importing bug</li>
+          <li>Autodelete backups after 30 days</li>
+          <li>Added java version selection and JVM arguments</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.7.7" date="2026-06-22">
+      <description>
+        <p>Added Polish translation</p>
+      </description>
+    </release>
+    <release version="1.7.6" date="2026-06-16">
+      <description>
+        <ul>
+          <li>Added support for running multiple servers for peak mining and crafting.</li>
+          <li>Redesigned the Modrinth interface to be more user-friendly.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.7.3" date="2026-05-24">
+      <description>
+        <p>Playit agent fix</p>
+      </description>
+    </release>
+  </releases>
+  <content_rating type="oars-1.1"/>
+  <screenshots>
+    <screenshot>
+      <image type="source">screenshots/mods.png</image>
+      <caption xml:lang="en">Install and manage mods</caption>
+    </screenshot>
+    <screenshot>
+      <image type="source">screenshots/connect.png</image>
+      <caption xml:lang="en">Share local servers</caption>
+    </screenshot>
+    <screenshot type="default">
+      <image type="source">screenshots/console.png</image>
+      <caption xml:lang="en">Server console and logs</caption>
+    </screenshot>
+    <screenshot>
+      <image type="source">screenshots/properties.png</image>
+      <caption xml:lang="en">Edit server properties</caption>
+    </screenshot>
+    <screenshot>
+      <image type="source">screenshots/backups.png</image>
+      <caption xml:lang="en">Create and restore backups</caption>
+    </screenshot>
+    <screenshot>
+      <image type="source">screenshots/files.png</image>
+      <caption xml:lang="en">Manage world files and backups</caption>
+    </screenshot>
+    <screenshot>
+      <image type="source">screenshots/performance.png</image>
+      <caption xml:lang="en">Monitor server performance</caption>
+    </screenshot>
+  </screenshots>
+</component>

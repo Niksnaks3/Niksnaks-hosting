@@ -1,0 +1,17 @@
+app-id: com.niksnakshosting.NiksnaksHosting
+runtime: org.gnome.Platform
+runtime-version: "50"
+sdk: org.gnome.Sdk
+command: niksnaks-hosting
+finish-args:
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+modules:
+  - python3-requirements.json
+  - name: niksnaks-hosting
+    buildsystem: meson
+    sources:
+      - type: dir
+        path: ../../
