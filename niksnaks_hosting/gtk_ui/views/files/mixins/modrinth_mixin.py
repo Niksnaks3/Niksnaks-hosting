@@ -1,7 +1,3 @@
-"""
-FilesView -- folders, worlds, backups, and Modrinth integration (per selected server).
-"""
-
 from __future__ import annotations
 
 import threading
@@ -17,10 +13,8 @@ from gi.repository import Adw, Gdk, GdkPixbuf, GLib, Gtk, Pango
 from ..utils import *
 from niksnaks_hosting.shared.utils.constants import LOADER_FABRIC, get_loader_display_name, normalize_loader
 
-
 class ModrinthMixin:
     def _server_loader(self) -> str:
-        """The selected server's mod loader id (Fabric/Forge), defaulting to Fabric."""
         if self._server_info:
             return normalize_loader(self._server_info.loader_type)
         return LOADER_FABRIC
@@ -150,7 +144,6 @@ class ModrinthMixin:
         cat_box, cat_buttons = make_filter_flowbox(category_items, 0, 4)
         sort_box, sort_buttons = make_filter_flowbox(sort_items, 1, 3)
 
-        # Set up Popover for filters
         filter_popover = Gtk.Popover()
         filter_btn.set_popover(filter_popover)
 
@@ -363,7 +356,6 @@ class ModrinthMixin:
 
         outer.append(sw)
 
-        # Run initial discovery search when opening the page.
         update_search_hint()
         GLib.idle_add(lambda: do_search(reset=True) or False)
         tv.set_content(outer)
@@ -940,7 +932,6 @@ class ModrinthMixin:
                 mods_dir.mkdir(parents=True, exist_ok=True)
                 installed_names_local = {p.name.lower() for p in mods_dir.glob("*.jar")}
 
-                # Delete old version if replacing an existing install
                 old_state = self._read_individual_mod_state().get("mods", {}).get(hit.project_id, None)
                 if old_state:
                     old_filename = old_state.get("filename", "")

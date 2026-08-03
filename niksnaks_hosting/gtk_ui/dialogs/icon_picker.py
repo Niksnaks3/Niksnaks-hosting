@@ -1,7 +1,3 @@
-"""
-IconPickerDialog - Image selector with crop-to-square and PNG conversion.
-"""
-
 import gi
 
 gi.require_version("Gtk", "4.0")
@@ -12,10 +8,7 @@ from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, GObject, Gtk
 
 from niksnaks_hosting.shared.utils.image_utils import convert_to_png, load_pixbuf
 
-
 class IconPickerDialog(Adw.Dialog):
-    """Dialog for selecting, cropping, and setting a server icon."""
-
     __gsignals__ = {
         "icon-selected": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
     }
@@ -27,7 +20,6 @@ class IconPickerDialog(Adw.Dialog):
         self._source_path = None
         self._pixbuf = None
 
-        # Crop region (relative 0-1)
         self._crop_x = 0.0
         self._crop_y = 0.0
         self._crop_size = 1.0
@@ -54,14 +46,12 @@ class IconPickerDialog(Adw.Dialog):
 
         toolbar.add_top_bar(header)
 
-        # Content
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
         content.set_margin_top(16)
         content.set_margin_bottom(16)
         content.set_margin_start(16)
         content.set_margin_end(16)
 
-        # Preview area
         preview_frame = Gtk.Frame()
         preview_frame.set_halign(Gtk.Align.CENTER)
 
@@ -71,7 +61,6 @@ class IconPickerDialog(Adw.Dialog):
         preview_frame.set_child(self._preview)
         content.append(preview_frame)
 
-        # Result preview (small avatar)
         result_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         result_box.set_halign(Gtk.Align.CENTER)
 
@@ -84,14 +73,12 @@ class IconPickerDialog(Adw.Dialog):
 
         content.append(result_box)
 
-        # File chooser button
         choose_btn = Gtk.Button(label=_("Choose Image…"))
         choose_btn.add_css_class("pill")
         choose_btn.set_halign(Gtk.Align.CENTER)
         choose_btn.connect("clicked", self._on_choose_image)
         content.append(choose_btn)
 
-        # Info
         info_label = Gtk.Label(label=_("Select a PNG, JPG, or WebP image."))
         info_label.add_css_class("dim-label")
         info_label.set_halign(Gtk.Align.CENTER)
@@ -102,11 +89,9 @@ class IconPickerDialog(Adw.Dialog):
         self.set_child(toolbar)
 
     def _on_choose_image(self, button):
-        """Open file chooser for image selection."""
         dialog = Gtk.FileDialog()
         dialog.set_title(_("Select Server Icon"))
 
-        # File filters
         filter_images = Gtk.FileFilter()
         filter_images.set_name(_("Images"))
         filter_images.add_mime_type("image/png")
@@ -127,7 +112,6 @@ class IconPickerDialog(Adw.Dialog):
         )
 
     def _on_file_chosen(self, dialog, result):
-        """Handle file chooser result."""
         try:
             file = dialog.open_finish(result)
             if file:
@@ -137,18 +121,15 @@ class IconPickerDialog(Adw.Dialog):
             pass
 
     def _load_preview(self):
-        """Load and display the selected image."""
         if not self._source_path:
             return
 
         try:
             pixbuf = GdkPixbuf.Pixbuf.new_from_file(self._source_path)
 
-            # Show preview
             texture = Gdk.Texture.new_for_pixbuf(pixbuf)
             self._preview.set_paintable(texture)
 
-            # Generate cropped preview
             self._generate_cropped_preview()
 
             self._apply_btn.set_sensitive(True)
@@ -157,9 +138,8 @@ class IconPickerDialog(Adw.Dialog):
             print(f"Failed to load image: {e}")
 
     def _generate_cropped_preview(self):
-        """Generate a small cropped preview avatar."""
         try:
-            # Use PIL to do the crop
+
             output_path = self._server_dir / "icon_preview.png"
             self._server_dir.mkdir(parents=True, exist_ok=True)
 
@@ -178,7 +158,6 @@ class IconPickerDialog(Adw.Dialog):
             print(f"Failed to generate preview: {e}")
 
     def _on_apply(self, button):
-        """Apply the selected icon."""
         if not self._source_path:
             return
 
@@ -192,7 +171,6 @@ class IconPickerDialog(Adw.Dialog):
                 size=128,
             )
 
-            # Clean up preview
             preview_path = self._server_dir / "icon_preview.png"
             preview_path.unlink(missing_ok=True)
 

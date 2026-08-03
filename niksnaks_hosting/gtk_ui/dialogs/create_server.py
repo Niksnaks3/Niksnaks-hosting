@@ -1,7 +1,3 @@
-"""
-CreateServerDialog - Multi-step dialog for creating a new Fabric server.
-"""
-
 import threading
 from pathlib import Path
 
@@ -40,8 +36,6 @@ FABRIC_OPTIMISATION_MODS = [
     ("modernfix", _("ModernFix")),
 ]
 
-# Forge performance mods. Each is filtered by actual loader support at install
-# time, so a slug without a Forge release is simply skipped rather than failing.
 FORGE_OPTIMISATION_MODS = [
     ("ferrite-core", _("FerriteCore")),
     ("modernfix", _("ModernFix")),
@@ -52,15 +46,11 @@ FORGE_OPTIMISATION_MODS = [
 
 LOADER_LABELS = [get_loader_display_name(loader) for loader in SUPPORTED_LOADERS]
 
-
 DIFFICULTY_MODES = [*DIFFICULTIES, "hardcore"]
 
 COMMON_JAVA_VERSIONS = [8, 11, 16, 17, 21, 25]
 
-
 class CreateServerDialog(Adw.Dialog):
-    """Dialog for creating a new Fabric Minecraft server."""
-
     __gsignals__ = {
         "server-created": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
     }
@@ -79,7 +69,6 @@ class CreateServerDialog(Adw.Dialog):
         self.set_content_width(500)
         self.set_content_height(600)
 
-        # Main content
         self._toolbar_view = Adw.ToolbarView()
 
         header = Adw.HeaderBar()
@@ -98,19 +87,15 @@ class CreateServerDialog(Adw.Dialog):
 
         self._toolbar_view.add_top_bar(header)
 
-        # Stack for config vs progress
         self._stack = Gtk.Stack()
         self._stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT)
 
-        # ===== First Step =====
         details_page = self._build_details_page()
         self._stack.add_named(details_page, "details")
 
-        # ===== Second Step =====
         runtime_page = self._build_runtime_page()
         self._stack.add_named(runtime_page, "runtime")
 
-        # ===== Progress Page =====
         progress_page = self._build_progress_page()
         self._stack.add_named(progress_page, "progress")
 
@@ -119,11 +104,9 @@ class CreateServerDialog(Adw.Dialog):
         self._toolbar_view.set_content(self._stack)
         self.set_child(self._toolbar_view)
 
-        # Fetch versions
         self._fetch_versions()
 
     def _build_details_page(self) -> Gtk.Widget:
-        """Build step 1: basic server details."""
         scrolled = Gtk.ScrolledWindow()
         scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
 
@@ -231,7 +214,6 @@ class CreateServerDialog(Adw.Dialog):
         return scrolled
 
     def _build_runtime_page(self) -> Gtk.Widget:
-        """Build step 2: versions, runtime, and optional optimizations."""
         scrolled = Gtk.ScrolledWindow()
         scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
 
@@ -311,7 +293,6 @@ class CreateServerDialog(Adw.Dialog):
         return scrolled
 
     def _build_progress_page(self) -> Gtk.Widget:
-        """Build the progress/installation page."""
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         box.set_valign(Gtk.Align.CENTER)
         box.set_halign(Gtk.Align.CENTER)
@@ -323,7 +304,6 @@ class CreateServerDialog(Adw.Dialog):
         self._progress_status.set_title(_("Creating Server"))
         self._progress_status.set_description(_("Preparing..."))
 
-        # Progress bar
         self._progress_bar = Gtk.ProgressBar()
         self._progress_bar.set_show_text(True)
         self._progress_bar.set_margin_start(40)
@@ -349,18 +329,14 @@ class CreateServerDialog(Adw.Dialog):
         return LOADER_FABRIC
 
     def _fetch_versions(self):
-        """Fetch available versions for the selected loader."""
         self._mc_version_row.set_sensitive(False)
         self._fetch_gen += 1
         gen = self._fetch_gen
 
         def on_versions(game_vers, loader_vers):
-            # Runs on the worker thread. Defer the shared-state mutation to the
-            # main thread and ignore stale results from a previous loader
-            # selection (the user may have switched loaders since this fetch).
             def apply():
                 if gen != self._fetch_gen:
-                    return False  # superseded by a newer fetch
+                    return False
                 self._game_versions = game_vers
                 self._loader_versions = loader_vers
                 self._populate_versions()
@@ -373,11 +349,9 @@ class CreateServerDialog(Adw.Dialog):
         )
 
     def _on_loader_changed(self, *_args):
-        """Re-populate versions when the loader selection changes."""
         self._game_versions = []
         self._loader_versions = []
-        # Invalidate any in-flight Forge build resolve so a stale build for the
-        # previous loader can't land after the switch and overwrite these.
+
         self._forge_resolve_gen += 1
         self._mc_version_list = Gtk.StringList.new([_("Loading...")])
         self._mc_version_row.set_model(self._mc_version_list)
@@ -386,7 +360,6 @@ class CreateServerDialog(Adw.Dialog):
         self._validate()
 
     def _populate_versions(self):
-        """Populate version dropdowns (called on main thread)."""
         if self._game_versions:
             new_list = Gtk.StringList.new(self._game_versions)
             self._mc_version_row.set_model(new_list)
@@ -397,13 +370,12 @@ class CreateServerDialog(Adw.Dialog):
             self._loader_version_row.set_subtitle(_("No versions found"))
 
         if self._selected_loader() == LOADER_FABRIC and self._loader_versions:
-            # Show the newest Fabric loader version (first in list) as read-only.
+
             self._loader_version_row.set_subtitle(self._loader_versions[0])
 
         self._validate()
 
     def _on_mc_version_changed(self, row, _pspec):
-        """Handle MC version selection change."""
         idx = row.get_selected()
         if idx < len(self._game_versions):
             mc_ver = self._game_versions[idx]
@@ -415,7 +387,6 @@ class CreateServerDialog(Adw.Dialog):
         self._validate()
 
     def _resolve_forge_build(self, mc_ver: str) -> None:
-        """Resolve the recommended Forge build for an MC version (async)."""
         self._loader_versions = []
         self._loader_version_row.set_subtitle(_("Loading..."))
         self._forge_resolve_gen += 1
@@ -426,7 +397,7 @@ class CreateServerDialog(Adw.Dialog):
 
             def done():
                 if gen != self._forge_resolve_gen or self._selected_loader() != LOADER_FORGE:
-                    return False  # superseded, or the user switched away from Forge
+                    return False
                 self._loader_versions = [build] if build else []
                 if build:
                     self._loader_version_row.set_subtitle(build)
@@ -440,7 +411,6 @@ class CreateServerDialog(Adw.Dialog):
         threading.Thread(target=worker, daemon=True).start()
 
     def _select_java_version(self, java_ver: int) -> None:
-        """Select the closest matching Java version in the combo row."""
         closest = min(COMMON_JAVA_VERSIONS, key=lambda v: abs(v - java_ver))
         self._java_version_row.set_selected(COMMON_JAVA_VERSIONS.index(closest))
         self._update_java_subtitle()
@@ -449,7 +419,6 @@ class CreateServerDialog(Adw.Dialog):
         self._update_java_subtitle()
 
     def _update_java_subtitle(self) -> None:
-        """Update the Java version row subtitle with availability info."""
         idx = self._java_version_row.get_selected()
         java_ver = COMMON_JAVA_VERSIONS[idx] if idx < len(COMMON_JAVA_VERSIONS) else 21
         java_mgr = self._server_manager.java_manager
@@ -565,7 +534,6 @@ class CreateServerDialog(Adw.Dialog):
         self._validate()
 
     def _validate(self, *args):
-        """Validate current step and update primary action state."""
         name = self._name_entry.get_text().strip()
         has_versions = len(self._game_versions) > 0 and len(self._loader_versions) > 0
         page = self._stack.get_visible_child_name()
@@ -590,7 +558,6 @@ class CreateServerDialog(Adw.Dialog):
         self._create_btn.set_sensitive(False)
 
     def _on_primary_clicked(self, button):
-        """Move to next step or start creation on the final step."""
         page = self._stack.get_visible_child_name()
         if page == "details":
             self._stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT)
@@ -606,7 +573,7 @@ class CreateServerDialog(Adw.Dialog):
         name = self._name_entry.get_text().strip()
         mc_idx = self._mc_version_row.get_selected()
         mc_version = self._game_versions[mc_idx] if mc_idx < len(self._game_versions) else ""
-        # Use the newest loader version (first in the list)
+
         loader_version = self._loader_versions[0] if self._loader_versions else ""
         loader_type = self._selected_loader()
         ram_mb = int(self._ram_row.get_value())
@@ -638,12 +605,10 @@ class CreateServerDialog(Adw.Dialog):
         if not name or not mc_version or not loader_version:
             return
 
-        # Switch to progress page
         self._stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT)
         self._stack.set_visible_child_name("progress")
         self._create_btn.set_sensitive(False)
 
-        # Run installation in background
         thread = threading.Thread(
             target=self._install_thread,
             args=(
@@ -683,14 +648,13 @@ class CreateServerDialog(Adw.Dialog):
         world_import_source_path,
         install_optimisations,
     ):
-        """Background installation thread."""
+
         try:
             java_ver = java_version
             java_mgr = self._server_manager.java_manager
             dl_mgr = self._server_manager.download_manager
             loader_type = normalize_loader(loader_type)
 
-            # Step 1: Ensure JRE is available
             if not java_mgr.is_java_available(java_ver):
                 self._update_progress(
                     0.05, _("Downloading Java Runtime..."), _("JRE {} for MC {}").format(java_ver, mc_version)
@@ -728,7 +692,6 @@ class CreateServerDialog(Adw.Dialog):
                     self._show_error(_("Failed to download Forge installer"))
                     return
 
-                # Step 3: Create server entry
                 self._update_progress(0.44, _("Creating server..."), "")
                 server_info = self._server_manager.add_server(
                     name=name,
@@ -739,7 +702,6 @@ class CreateServerDialog(Adw.Dialog):
                     loader_type=loader_type,
                 )
 
-                # Step 4: Install Forge (installer fetches vanilla server.jar itself)
                 self._update_progress(0.48, _("Installing Forge server..."), _("MC {}").format(mc_version))
                 success, msg = dl_mgr.install_forge_server(
                     java_path=java_path,
@@ -757,7 +719,6 @@ class CreateServerDialog(Adw.Dialog):
             else:
                 self._update_progress(0.28, _("Downloading Fabric installer..."), "")
 
-                # Step 2: Download Fabric installer
                 installer_path = dl_mgr.download_installer(
                     progress_callback=lambda frac, msg: self._update_progress(0.28 + frac * 0.14, msg, ""),
                 )
@@ -766,7 +727,6 @@ class CreateServerDialog(Adw.Dialog):
                     self._show_error(_("Failed to download Fabric installer"))
                     return
 
-                # Step 3: Create server entry
                 self._update_progress(0.44, _("Creating server..."), "")
                 server_info = self._server_manager.add_server(
                     name=name,
@@ -777,7 +737,6 @@ class CreateServerDialog(Adw.Dialog):
                     loader_type=loader_type,
                 )
 
-                # Step 3.5: Download vanilla server.jar from Mojang
                 self._update_progress(0.48, _("Downloading Minecraft server.jar..."), _("MC {}").format(mc_version))
                 success, msg = dl_mgr.download_server_jar(
                     mc_version=mc_version,
@@ -791,7 +750,6 @@ class CreateServerDialog(Adw.Dialog):
                     self._show_error(_("Failed to download server.jar: {}").format(msg))
                     return
 
-                # Step 4: Install Fabric
                 self._update_progress(0.62, _("Installing Fabric server..."), _("MC {}").format(mc_version))
 
                 success, msg = dl_mgr.install_fabric_server(
@@ -807,7 +765,6 @@ class CreateServerDialog(Adw.Dialog):
                     self._show_error(_("Fabric installation failed: {}").format(msg))
                     return
 
-            # Step 5: Apply server settings
             self._update_progress(0.88, _("Applying server settings..."), "")
             from niksnaks_hosting.shared.backend.config_manager import ConfigManager
 
@@ -833,7 +790,6 @@ class CreateServerDialog(Adw.Dialog):
                     self._show_error(_("Failed to import world: {}").format(msg))
                     return
 
-            # Step 6: Save icon if selected
             if icon_source_path:
                 self._update_progress(0.92, _("Applying server icon..."), "")
                 try:
@@ -843,12 +799,10 @@ class CreateServerDialog(Adw.Dialog):
                 except Exception:
                     pass
 
-            # Step 7: Optional performance mods
             if install_optimisations:
                 self._update_progress(0.94, _("Installing server-optimising mods..."), "0/0")
                 self._install_optimising_mods(server_info.server_dir, mc_version, loader_type)
 
-            # Done!
             self._show_success(server_info.id)
 
         except Exception as e:
@@ -913,7 +867,6 @@ class CreateServerDialog(Adw.Dialog):
             pass
 
     def _find_supported_optimisation_version(self, modrinth_client, project_id: str, mc_version: str, loader_type: str):
-        """Return a version only when it explicitly supports the selected MC version and loader."""
         versions = modrinth_client.get_project_versions(project_id)
         if not versions:
             return None
@@ -927,8 +880,6 @@ class CreateServerDialog(Adw.Dialog):
         return None
 
     def _update_progress(self, fraction, title, detail):
-        """Update progress on the main thread."""
-
         def _update():
             self._progress_bar.set_fraction(min(1.0, fraction))
             self._progress_status.set_description(title)
@@ -937,8 +888,6 @@ class CreateServerDialog(Adw.Dialog):
         GLib.idle_add(_update)
 
     def _show_error(self, message):
-        """Show error state on the main thread."""
-
         def _update():
             self._progress_status.set_icon_name("dialog-error-symbolic")
             self._progress_status.set_title(_("Creation Failed"))
@@ -950,8 +899,6 @@ class CreateServerDialog(Adw.Dialog):
         GLib.idle_add(_update)
 
     def _show_success(self, server_id):
-        """Show success state and close dialog."""
-
         def _update():
             self._progress_status.set_icon_name("object-select-symbolic")
             self._progress_status.set_title(_("Server Created!"))
@@ -959,13 +906,11 @@ class CreateServerDialog(Adw.Dialog):
             self._progress_bar.set_fraction(1.0)
             self._progress_label.set_label("")
 
-            # Auto-close after 1.5 seconds
             GLib.timeout_add(1500, lambda: self._finish(server_id))
 
         GLib.idle_add(_update)
 
     def _finish(self, server_id):
-        """Close dialog and emit signal."""
         self.emit("server-created", server_id)
         self.close()
         return False

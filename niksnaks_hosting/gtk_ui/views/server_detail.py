@@ -1,8 +1,3 @@
-"""
-ServerDetailView - Main detail container with ViewStack for Console, Performance, Properties.
-Uses Adw.ToolbarView for proper Adwaita header bar integration.
-"""
-
 import gi
 
 gi.require_version("Gtk", "4.0")
@@ -19,13 +14,7 @@ from niksnaks_hosting.shared.backend.server_manager import ServerInfo, ServerMan
 from niksnaks_hosting.shared.backend.server_process import ServerProcess
 from niksnaks_hosting.shared.utils.constants import ServerStatus
 
-
 class ServerDetailView(Gtk.Box):
-    """
-    Detail view for a selected server.
-    Uses Adw.ToolbarView with ViewSwitcherTitle for proper Adwaita integration.
-    """
-
     def __init__(self, server_manager: ServerManager, toast_overlay=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self._server_manager = server_manager
@@ -50,7 +39,6 @@ class ServerDetailView(Gtk.Box):
         self._toolbar_view.set_hexpand(True)
         self._toolbar_view.set_vexpand(True)
 
-        # Outer NavigationView so fullscreen pages (Modrinth) can overlay the tab bar
         self._outer_nav = Adw.NavigationView()
         self._outer_nav.set_hexpand(True)
         self._outer_nav.set_vexpand(True)
@@ -62,16 +50,13 @@ class ServerDetailView(Gtk.Box):
         self._outer_nav.push(self._outer_nav_root)
         self.append(self._outer_nav)
 
-        # ===== Header Bar =====
         self._header = Adw.HeaderBar()
         self._header.set_show_start_title_buttons(False)
 
-        # View switcher title -- handles both title display and view switching
         self._view_switcher_title = Adw.ViewSwitcherTitle()
         self._view_switcher_title.set_title(_("Server"))
         self._header.set_title_widget(self._view_switcher_title)
 
-        # Start/Stop button -- use standard Adwaita suggested-action / destructive-action
         self._toggle_btn = Gtk.Button(label=_("Start"))
         self._toggle_btn.add_css_class("suggested-action")
         self._toggle_btn.connect("clicked", self._on_toggle_clicked)
@@ -79,7 +64,6 @@ class ServerDetailView(Gtk.Box):
 
         self._toolbar_view.add_top_bar(self._header)
 
-        # ===== Content: view stack =====
         self._view_stack = Adw.ViewStack()
         self._view_stack.set_vexpand(True)
         self._view_stack.connect("notify::visible-child-name", self._on_tab_changed)
@@ -100,7 +84,6 @@ class ServerDetailView(Gtk.Box):
         self._detail_content.append(self._view_stack)
         self._toolbar_view.set_content(self._detail_content)
 
-        # Bottom view switcher bar (for narrow layouts)
         self._switcher_bar = Adw.ViewSwitcherBar()
         self._switcher_bar.set_stack(self._view_stack)
         self._switcher_bar.set_reveal(False)
@@ -165,21 +148,16 @@ class ServerDetailView(Gtk.Box):
         return self._files_view
 
     def _push_fullscreen_page(self, page):
-        """Push a fullscreen page onto the outer nav, overlaying the tab bar."""
         self._outer_nav.push(page)
 
     def _on_switcher_title_visible_changed(self, *_args):
-        """Reveal the bottom switcher only in compact layouts."""
         self._sync_switcher_bar_reveal()
 
     def _sync_switcher_bar_reveal(self):
-        """Keep bottom switcher visibility in sync with title visibility."""
         self._switcher_bar.set_reveal(self._view_switcher_title.get_title_visible())
         return False
 
     def load_server(self, server_info: ServerInfo):
-        """Load a server's details into the view."""
-        # Pop any fullscreen overlay pages (like Modrinth) back to root
         try:
             self._outer_nav.pop_to_tag("niksnaks-hosting-detail-root")
         except Exception:
@@ -190,22 +168,17 @@ class ServerDetailView(Gtk.Box):
         if not server_info:
             return
 
-        # Update title
         self._view_switcher_title.set_title(f"{server_info.name} · {server_info.mc_version}")
         self._view_switcher_title.set_subtitle("")
 
-        # Get/create the server process for the selected server (start/stop, status row)
         selected = self._server_manager.get_process(server_info.id)
         self._set_selected_process(selected)
 
-        # Ensure a per-server console view exists and show it
         self._ensure_console_view(server_info.id)
         self._console_stack.set_visible_child_name(server_info.id)
 
-        # Ensure console views for all currently-running processes so they buffer in background
         self._connect_general_status_handlers()
 
-        # Perf follows the selected server
         if self._perf_view:
             self._perf_view.set_process(selected)
             self._sync_perf_with_io_process()
@@ -218,11 +191,9 @@ class ServerDetailView(Gtk.Box):
         if self._files_view:
             self._files_view.set_server(server_info, self._server_manager)
 
-        # Update toggle from the selected server's process
         self._update_toggle_for_selected(selected.status if selected else ServerStatus.STOPPED)
 
     def _set_selected_process(self, process: ServerProcess):
-        """Connect status updates for the sidebar-selected server (Start/Stop UI)."""
         if self._selected_process and self._selected_status_handler_id:
             try:
                 self._selected_process.disconnect(self._selected_status_handler_id)
@@ -234,7 +205,6 @@ class ServerDetailView(Gtk.Box):
             self._selected_status_handler_id = process.connect("status-changed", self._on_selected_status_changed)
 
     def _sync_perf_with_io_process(self):
-        """Perf follows the selected server's process."""
         if not self._perf_view:
             return
         p = self._selected_process
@@ -254,7 +224,6 @@ class ServerDetailView(Gtk.Box):
                 self._general_status_connected.add(pid)
 
     def _on_process_status_changed(self, process, status):
-        """Ensure console view exists whenever any server starts, so output buffers in background."""
         if status == ServerStatus.RUNNING or status == ServerStatus.STARTING:
             for sid, p in self._server_manager._processes.items():
                 if p is process:
@@ -262,12 +231,10 @@ class ServerDetailView(Gtk.Box):
                     break
 
     def _on_selected_status_changed(self, process, status):
-        """Handle selected server's process status (Start/Stop button)."""
         self._update_toggle_for_selected(status)
         self._sync_perf_with_io_process()
 
     def _update_toggle_for_selected(self, status: str):
-        """Update Start/Stop from the sidebar-selected server's process."""
         self._toggle_btn.remove_css_class("niksnaks-hosting-starting-button")
         selected_id = self._current_server.id if self._current_server else ""
         mods_busy = bool(selected_id) and self._server_manager.is_mod_operation_active(selected_id)
@@ -314,7 +281,6 @@ class ServerDetailView(Gtk.Box):
         self._update_toggle_for_selected(status)
 
     def _on_tab_changed(self, stack, _pspec):
-        """Keep tab navigation predictable when changing pages."""
         tab_name = stack.get_visible_child_name()
         if tab_name == "console":
             if self._current_server:
@@ -334,12 +300,10 @@ class ServerDetailView(Gtk.Box):
             files.refresh_worlds_if_changed(force=True)
 
     def poll_runtime_state(self) -> None:
-        """Refresh lightweight live UI bits from the window polling loop."""
         if self._view_stack.get_visible_child_name() == "files":
             self._ensure_files_view().refresh_worlds_if_changed()
 
     def _find_conflicting_server_name_for_port(self, port_type: str, port: int) -> str:
-        """Return the name of the first server that conflicts on the given port."""
         if not self._current_server:
             return _("another server")
         for sid, info in self._server_manager._servers.items():
@@ -369,7 +333,6 @@ class ServerDetailView(Gtk.Box):
         return _("another server")
 
     def _show_port_conflict_dialog(self, port_type: str, port: int):
-        """Show a blocking dialog when a port conflict is detected."""
         conflict_name = self._find_conflicting_server_name_for_port(port_type, port)
         dialog = Adw.AlertDialog.new(
             _("{} Port In Use").format(port_type),
@@ -385,7 +348,6 @@ class ServerDetailView(Gtk.Box):
         dialog.present(self.get_root())
 
     def _on_toggle_clicked(self, button):
-        """Handle start/stop button click."""
         if not self._selected_process:
             return
 

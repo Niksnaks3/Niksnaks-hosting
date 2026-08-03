@@ -1,8 +1,3 @@
-"""
-WelcomeView - Empty state shown when no server is selected.
-Includes its own Adw.HeaderBar with proper window controls.
-"""
-
 from pathlib import Path
 
 import gi
@@ -14,14 +9,7 @@ from gi.repository import Adw, Gdk, GdkPixbuf, Gtk
 
 from niksnaks_hosting.shared.utils.constants import APP_ID
 
-
 class WelcomeView(Gtk.Box):
-    """Welcome/empty state view shown when no server is selected.
-
-    Uses Adw.ToolbarView internally so it has a proper HeaderBar with window
-    controls visible.
-    """
-
     def __init__(self):
         super().__init__()
 
@@ -30,13 +18,10 @@ class WelcomeView(Gtk.Box):
         self._toolbar_view.set_vexpand(True)
         self.append(self._toolbar_view)
 
-        # Header bar with window controls
         self._header = Adw.HeaderBar()
         self._header.set_title_widget(Gtk.Label(label=_("Niksnaks-Hosting")))
         self._toolbar_view.add_top_bar(self._header)
 
-        # Use an explicit centered layout so the icon is rendered at a fixed size
-        # without extra scaling from StatusPage internals.
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
         content.set_halign(Gtk.Align.CENTER)
         content.set_valign(Gtk.Align.CENTER)

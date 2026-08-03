@@ -1,8 +1,3 @@
-"""
-ServerProcess - Manage a Minecraft server subprocess.
-Handles stdin/stdout/stderr piping and lifecycle management.
-"""
-
 import re
 import subprocess
 import threading
@@ -13,13 +8,7 @@ from niksnaks_hosting.shared.core.events import EventEmitter
 from niksnaks_hosting.shared.utils.constants import LOADER_FABRIC, ServerStatus, get_loader_display_name, normalize_loader
 from niksnaks_hosting.shared.utils.subprocess_utils import hidden_subprocess_kwargs
 
-
 class ServerProcess(EventEmitter):
-    """
-    Wraps a Minecraft server subprocess with lifecycle management.
-    Emits signals for output and status changes.
-    """
-
     def __init__(
         self,
         server_dir: str,
@@ -67,7 +56,6 @@ class ServerProcess(EventEmitter):
         return self._status in (ServerStatus.RUNNING, ServerStatus.STARTING)
 
     def start(self) -> bool:
-        """Start the Minecraft server."""
         if self.is_running:
             return False
 
@@ -110,7 +98,6 @@ class ServerProcess(EventEmitter):
             self._process = subprocess.Popen(cmd, **popen_kwargs)
             self._pid = self._process.pid
 
-            # Start output reader thread
             self._stdout_thread = threading.Thread(target=self._read_output, daemon=True)
             self._stdout_thread.start()
 
@@ -122,7 +109,6 @@ class ServerProcess(EventEmitter):
             return False
 
     def stop(self):
-        """Gracefully stop the server by sending /stop command."""
         if not self.is_running or not self._process:
             return
 
@@ -130,7 +116,6 @@ class ServerProcess(EventEmitter):
         self._emit_output("[Niksnaks-Hosting] Sending stop command...\n")
         self.send_command("stop")
 
-        # Wait for graceful shutdown in background
         def _wait_stop():
             try:
                 self._process.wait(timeout=30)
@@ -145,7 +130,6 @@ class ServerProcess(EventEmitter):
         threading.Thread(target=_wait_stop, daemon=True).start()
 
     def kill(self):
-        """Force kill the server process."""
         if self._process:
             try:
                 self._process.kill()
@@ -159,11 +143,9 @@ class ServerProcess(EventEmitter):
             self._emit_output("[Niksnaks-Hosting] Server killed.\n")
 
     def send_command(self, command: str):
-        """Send a command to the server via stdin."""
         if not self._process or not self._process.stdin:
             return
 
-        # Strip leading slash if present (server console doesn't use /)
         cmd = command.strip()
         if cmd.startswith("/"):
             cmd = cmd[1:]
@@ -175,13 +157,11 @@ class ServerProcess(EventEmitter):
             pass
 
     def _read_output(self):
-        """Read stdout/stderr in a background thread."""
         try:
             for line in iter(self._process.stdout.readline, ""):
                 if not line:
                     break
 
-                # Detect server started
                 if self._status == ServerStatus.STARTING:
                     if "Done" in line and "For help" in line:
                         self.status = ServerStatus.RUNNING
@@ -193,7 +173,7 @@ class ServerProcess(EventEmitter):
         except Exception:
             pass
         finally:
-            # Process ended
+
             if self._status != ServerStatus.STOPPED:
                 self._pid = None
                 self.status = ServerStatus.STOPPED
@@ -202,7 +182,6 @@ class ServerProcess(EventEmitter):
                 self._emit_output("[Niksnaks-Hosting] Server process ended.\n")
 
     def _emit_output(self, text: str):
-        """Emit output signal on the main thread."""
         self.log_history.append(text)
         if len(self.log_history) > 1000:
             self.log_history.pop(0)

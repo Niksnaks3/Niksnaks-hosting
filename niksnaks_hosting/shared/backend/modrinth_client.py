@@ -1,7 +1,3 @@
-"""
-Modrinth API v2 -- search and download Fabric mods and modpacks (stdlib only).
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -23,7 +19,6 @@ API = "https://api.modrinth.com/v2"
 
 _SSL_CONTEXT = make_ssl_context()
 
-
 @dataclass
 class ModrinthHit:
     project_id: str
@@ -36,7 +31,6 @@ class ModrinthHit:
     author: str
     categories: list[str]
     project_type: str
-
 
 @dataclass
 class ModrinthVersion:
@@ -51,13 +45,11 @@ class ModrinthVersion:
     download_url: str
     filename: str
 
-
 @dataclass
 class ModpackInstallResult:
     downloaded_files: int
     extracted_override_files: int
     managed_mod_files: list[str]
-
 
 def _version_to_model(ver: dict[str, Any]) -> ModrinthVersion | None:
     files = ver.get("files") or []
@@ -77,7 +69,6 @@ def _version_to_model(ver: dict[str, Any]) -> ModrinthVersion | None:
         filename=chosen.get("filename", "mod.jar"),
     )
 
-
 def _request_json(url: str, timeout: float = 30.0) -> Any:
     req = urllib.request.Request(
         url,
@@ -86,14 +77,12 @@ def _request_json(url: str, timeout: float = 30.0) -> Any:
     with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CONTEXT) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
-
 def _pick_primary_file(files: list[dict[str, Any]]) -> dict[str, Any] | None:
     primary = next((f for f in files if f.get("primary")), None)
     if primary:
         return primary
     jar = next((f for f in files if str(f.get("filename", "")).endswith(".jar")), None)
     return jar if jar else (files[0] if files else None)
-
 
 def _pick_mrpack_file(files: list[dict[str, Any]]) -> dict[str, Any] | None:
     primary_pack = next(
@@ -105,15 +94,12 @@ def _pick_mrpack_file(files: list[dict[str, Any]]) -> dict[str, Any] | None:
     pack = next((f for f in files if str(f.get("filename", "")).endswith(".mrpack")), None)
     return pack if pack else (files[0] if files else None)
 
-
 def _download_bytes(url: str, timeout: float = 120.0) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CONTEXT) as resp:
         return resp.read()
 
-
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
-
 
 def _is_png_file(path: Path) -> bool:
     try:
@@ -122,9 +108,7 @@ def _is_png_file(path: Path) -> bool:
     except Exception:
         return False
 
-
 def _normalize_icon_bytes(data: bytes) -> bytes:
-    """Return PNG-encoded icon bytes, converting other formats (e.g. WebP) via Pillow."""
     if data.startswith(_PNG_MAGIC):
         return data
     try:
@@ -139,9 +123,7 @@ def _normalize_icon_bytes(data: bytes) -> bytes:
     except Exception:
         return data
 
-
 def get_icon_path(url: str, timeout: float = 20.0) -> str | None:
-    """Download an icon from a URL and cache it to disk, returning the local file path."""
     if not url:
         return None
     from niksnaks_hosting.shared.utils.constants import CACHE_DIR
@@ -161,7 +143,6 @@ def get_icon_path(url: str, timeout: float = 20.0) -> str | None:
     except Exception:
         return None
 
-
 def _safe_target(root: Path, relative_path: str) -> Path | None:
     rel = str(relative_path or "").replace("\\", "/").lstrip("/")
     if not rel:
@@ -175,7 +156,6 @@ def _safe_target(root: Path, relative_path: str) -> Path | None:
         return None
     return target
 
-
 def _verify_hash(data: bytes, hashes: dict[str, Any]) -> bool:
     if not isinstance(hashes, dict) or not hashes:
         return True
@@ -188,7 +168,6 @@ def _verify_hash(data: bytes, hashes: dict[str, Any]) -> bool:
         return actual == expected
     return True
 
-
 def search_mods(
     query: str,
     limit: int = 20,
@@ -200,10 +179,7 @@ def search_mods(
     server_side_only: bool = True,
     project_type: str = "mod",
 ) -> tuple[list[ModrinthHit], int]:
-    """Search Modrinth with optional filters and pagination.
 
-    Returns (hits, total_hits).
-    """
     base = {
         "limit": str(max(1, limit)),
         "offset": str(max(0, offset)),
@@ -217,7 +193,7 @@ def search_mods(
         ptype = "mod"
 
     if ptype == "datapack":
-        # Datapacks are a first-class project_type on Modrinth -- no loader facet needed.
+
         facets_raw: list[list[str]] = [["project_type:datapack"]]
     else:
         facets_raw: list[list[str]] = [[f"project_type:{ptype}"], [f"categories:{loader}"]]
@@ -258,7 +234,7 @@ def search_mods(
 
     hits: list[ModrinthHit] = []
     for h in raw_hits:
-        # When searching datapacks the API returns project_type "mod"; override it.
+
         effective_ptype = "datapack" if ptype == "datapack" else str(h.get("project_type") or ptype)
         hits.append(
             ModrinthHit(
@@ -277,9 +253,7 @@ def search_mods(
     total_hits = int(data.get("total_hits") or len(hits))
     return hits, total_hits
 
-
 def get_project(project_id: str) -> dict[str, Any] | None:
-    """Fetch a single Modrinth project object by id or slug."""
     url = f"{API}/project/{project_id}"
     try:
         data = _request_json(url)
@@ -289,9 +263,7 @@ def get_project(project_id: str) -> dict[str, Any] | None:
         return data
     return None
 
-
 def get_project_versions(project_id: str) -> list[ModrinthVersion]:
-    """Return all available versions for a project (newest first per API)."""
     url = f"{API}/project/{project_id}/version"
     try:
         raw_versions = _request_json(url)
@@ -305,9 +277,7 @@ def get_project_versions(project_id: str) -> list[ModrinthVersion]:
             out.append(model)
     return out
 
-
 def get_version(version_id: str) -> dict[str, Any] | None:
-    """Fetch a single Modrinth version object by id."""
     url = f"{API}/version/{version_id}"
     try:
         data = _request_json(url)
@@ -317,17 +287,12 @@ def get_version(version_id: str) -> dict[str, Any] | None:
         return data
     return None
 
-
 def resolve_required_dependencies(
     version_id: str,
     game_version: str,
     loader: str = "fabric",
 ) -> list[ModrinthVersion]:
-    """
-    Resolve required dependencies for a given mod version.
 
-    Returns compatible dependency versions with downloadable jar files.
-    """
     root = get_version(version_id)
     if not root:
         return []
@@ -379,14 +344,13 @@ def resolve_required_dependencies(
 
     return resolved
 
-
 def find_compatible_versions(
     project_id: str,
     game_version: str,
     loader: str = "fabric",
     limit: int = 8,
 ) -> list[ModrinthVersion]:
-    """Return compatible versions, preferring exact MC+loader, then loader only."""
+
     all_versions = get_project_versions(project_id)
     if not all_versions:
         return []
@@ -400,40 +364,29 @@ def find_compatible_versions(
     if loader_only:
         return loader_only[:limit]
 
-    # No version matches the requested loader. Datapacks are loader-agnostic, so
-    # keep the any-version fallback for them; for mods/modpacks return nothing
-    # rather than silently installing an incompatible jar (e.g. a Fabric build
-    # on a Forge server).
     if loader_l == "datapack":
         return all_versions[:1]
     return []
-
 
 def find_compatible_version(
     project_id: str,
     game_version: str,
     loader: str = "fabric",
 ) -> ModrinthVersion | None:
-    """Return best single version for install, or None."""
+
     versions = find_compatible_versions(project_id, game_version, loader=loader, limit=1)
     return versions[0] if versions else None
 
-
 def find_compatible_version_file(project_id: str, game_version: str, loader: str = "fabric") -> tuple[str, str] | None:
-    """
-    Returns (download_url, filename) for the best-matching version file, or None.
-    """
     chosen = find_compatible_version(project_id, game_version, loader=loader)
     if not chosen:
         return None
     return (chosen.download_url, chosen.filename)
 
-
 def download_to(url: str, dest: Path, timeout: float = 120.0) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     data = _download_bytes(url, timeout=timeout)
     dest.write_bytes(data)
-
 
 def install_modpack(
     version_id: str,
@@ -441,12 +394,7 @@ def install_modpack(
     timeout: float = 120.0,
     progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> ModpackInstallResult:
-    """
-    Download and install a Modrinth modpack version into a server directory.
 
-    - Downloads files from modrinth.index.json where server env is not unsupported.
-    - Extracts overrides and server-overrides into the server root.
-    """
     raw = get_version(version_id)
     if not raw:
         raise RuntimeError("Could not fetch selected modpack version.")

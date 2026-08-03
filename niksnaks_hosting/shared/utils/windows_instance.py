@@ -1,9 +1,3 @@
-"""
-Windows single-instance IPC using a named kernel event.
-
-Allows a second instance to signal the first instance to show its window.
-"""
-
 from __future__ import annotations
 
 import ctypes
@@ -22,9 +16,7 @@ INFINITE = ctypes.c_uint32(-1).value
 _event_handle = None
 _watcher_thread = None
 
-
 def _ensure_event_name() -> str:
-    """Return a per-user event name so it works with per-user installs."""
     if sys.platform != "win32":
         return EVENT_NAME
     try:
@@ -35,9 +27,7 @@ def _ensure_event_name() -> str:
     except Exception:
         return EVENT_NAME
 
-
 def is_first_instance() -> bool:
-    """Try to create a named event; return True if this is the first instance."""
     global _event_handle
     if sys.platform != "win32":
         return True
@@ -54,9 +44,7 @@ def is_first_instance() -> bool:
     except Exception:
         return True
 
-
 def signal_show() -> None:
-    """Signal the first instance to show its window, then exit."""
     if sys.platform != "win32":
         return
     try:
@@ -68,9 +56,7 @@ def signal_show() -> None:
     except Exception:
         pass
 
-
 def start_show_listener(show_callback) -> None:
-    """Start a daemon thread that waits for the show event and calls the callback."""
     global _event_handle, _watcher_thread
     if sys.platform != "win32" or _event_handle is None:
         return
@@ -87,9 +73,7 @@ def start_show_listener(show_callback) -> None:
     _watcher_thread = Thread(target=watcher, daemon=True)
     _watcher_thread.start()
 
-
 def cleanup() -> None:
-    """Close the event handle (called during app shutdown)."""
     global _event_handle, _watcher_thread
     if sys.platform != "win32":
         return

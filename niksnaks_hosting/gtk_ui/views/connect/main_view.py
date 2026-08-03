@@ -1,7 +1,3 @@
-"""
-ConnectView - Server connection tools (playit.gg tunnel).
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -17,10 +13,8 @@ from niksnaks_hosting.shared.backend.server_manager import ServerInfo, ServerMan
 
 PLAYIT_DASHBOARD_URL = "https://playit.gg/account/tunnels"
 
-
 from .mixins import LocalIpMixin, PlayersMixin, PlayitMixin
 from .utils import *
-
 
 class ConnectView(Gtk.Box, LocalIpMixin, PlayersMixin, PlayitMixin):
     def __init__(self):

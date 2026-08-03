@@ -1,7 +1,3 @@
-"""
-FilesView -- folders, worlds, backups, and Modrinth integration (per selected server).
-"""
-
 from __future__ import annotations
 
 import json
@@ -24,7 +20,6 @@ from niksnaks_hosting.shared.utils.net import make_ssl_context
 from ..utils import *
 
 _SSL_CONTEXT = make_ssl_context()
-
 
 class PlayersMixin:
     def _push_players_page(self, *_args) -> None:
@@ -182,7 +177,6 @@ class PlayersMixin:
         return f"{raw[0:8]}-{raw[8:12]}-{raw[12:16]}-{raw[16:20]}-{raw[20:32]}"
 
     def _resolve_profile(self, name: str) -> tuple[str, str]:
-        """Best-effort Mojang profile lookup; returns (resolved_name, uuid)."""
         try:
             quoted = urllib.parse.quote(name)
             req = urllib.request.Request(

@@ -1,7 +1,3 @@
-"""
-ConnectView - Server connection tools (playit.gg tunnel).
-"""
-
 from __future__ import annotations
 
 import json
@@ -24,9 +20,7 @@ PLAYIT_DASHBOARD_URL = "https://playit.gg/account/tunnels"
 
 _SSL_CONTEXT = make_ssl_context()
 
-
 from ..utils import *
-
 
 class PlayersMixin:
     def _append_players_groups(self, page: Adw.PreferencesPage):

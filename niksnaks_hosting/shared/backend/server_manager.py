@@ -1,8 +1,3 @@
-"""
-ServerManager - CRUD operations for server instances.
-Handles persistence, creation workflow, and server lifecycle.
-"""
-
 import json
 import re
 import shutil
@@ -32,27 +27,19 @@ from niksnaks_hosting.shared.utils.constants import (
 )
 from niksnaks_hosting.shared.utils.migration import BACKUPS_DIR, LEGACY_BACKUPS_DIR
 
-# Backups written before the app was renamed keep their old names when migration
-# could not rename them (server on another drive, file locked, ...). Reading and
-# restoring must still recognise them, and a full restore must never wipe them.
 BACKUP_DIR_NAMES = (BACKUPS_DIR, LEGACY_BACKUPS_DIR)
 FULL_BACKUP_PREFIXES = ("niksnaks-hosting-full-backup-", "hosty-full-backup-")
 FULL_BACKUP_NAME_RE = r"^(?:niksnaks-hosting|hosty)-full-backup-(.+)-\d{8}-\d{6}\.zip$"
 
-
 class ServerInfo:
-    """Data class for server metadata."""
-
     def __init__(self, data: dict):
         self.id: str = data.get("id", str(uuid.uuid4()))
         self.name: str = data.get("name", _("Unnamed Server"))
         self.mc_version: str = data.get("mc_version", "")
-        # Existing servers predate multi-loader support and have no loader_type
-        # stored; default to Fabric so they keep working unchanged.
+
         self.loader_type: str = normalize_loader(data.get("loader_type", LOADER_FABRIC))
         self.loader_version: str = data.get("loader_version", "")
-        # A stored zero (seen after an interrupted create) survives .get(), and would
-        # both launch java with -Xmx0M and pin the memory graph to zero.
+
         stored_ram = int(data.get("ram_mb") or 0)
         self.ram_mb: int = stored_ram if stored_ram > 0 else DEFAULT_RAM_MB
         self.java_version: int = data.get("java_version", 21)
@@ -64,7 +51,6 @@ class ServerInfo:
 
     @property
     def server_dir(self) -> Path:
-        """Get the server directory path."""
         if self.path:
             return Path(self.path)
         return SERVERS_DIR / self.id
@@ -85,12 +71,7 @@ class ServerInfo:
             "autostart": self.autostart,
         }
 
-
 class ServerManager(EventEmitter):
-    """
-    Manages all server instances: CRUD, persistence, and process management.
-    """
-
     def __init__(self):
         super().__init__()
         self._servers: dict[str, ServerInfo] = {}
@@ -103,7 +84,6 @@ class ServerManager(EventEmitter):
         self._load()
 
     def _load(self):
-        """Load servers from persisted JSON."""
         if CONFIG_FILE.exists():
             try:
                 with open(CONFIG_FILE) as f:
@@ -115,7 +95,6 @@ class ServerManager(EventEmitter):
                 print(f"Failed to load servers: {e}")
 
     def _save(self):
-        """Persist servers to JSON."""
         data = {"servers": [s.to_dict() for s in self._servers.values()]}
         try:
             CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -126,11 +105,9 @@ class ServerManager(EventEmitter):
 
     @property
     def servers(self) -> list[ServerInfo]:
-        """Get all servers sorted by creation date."""
         return sorted(self._servers.values(), key=lambda s: s.created_at)
 
     def get_server(self, server_id: str) -> ServerInfo | None:
-        """Get a server by ID."""
         return self._servers.get(server_id)
 
     def add_server(
@@ -142,10 +119,7 @@ class ServerManager(EventEmitter):
         java_version: int | None = None,
         loader_type: str = LOADER_FABRIC,
     ) -> ServerInfo:
-        """
-        Create and register a new server.
-        Does NOT install the loader -- call install_server() separately.
-        """
+
         server_id = str(uuid.uuid4())
         java_ver = java_version if java_version is not None else get_required_java_version(mc_version)
 
@@ -162,7 +136,6 @@ class ServerManager(EventEmitter):
             }
         )
 
-        # Create server directory
         info.server_dir.mkdir(parents=True, exist_ok=True)
 
         self._servers[server_id] = info
@@ -172,7 +145,6 @@ class ServerManager(EventEmitter):
         return info
 
     def rename_server(self, server_id: str, new_name: str):
-        """Rename a server."""
         info = self._servers.get(server_id)
         if info:
             info.name = new_name
@@ -180,12 +152,6 @@ class ServerManager(EventEmitter):
             self.emit_on_main_thread("server-changed", server_id)
 
     def set_server_icon(self, server_id: str, icon_path: str):
-        """Set the icon for a server.
-
-        Also mirrors the icon as a 64x64 ``server-icon.png`` in the server
-        directory, so it shows up as the server's picture in Minecraft's
-        multiplayer server list.
-        """
         info = self._servers.get(server_id)
         if not info:
             return
@@ -200,18 +166,15 @@ class ServerManager(EventEmitter):
         self.emit_on_main_thread("server-changed", server_id)
 
     def get_autostart_server(self) -> ServerInfo | None:
-        """Get the first server configured to auto-start, if any."""
         for server in self._servers.values():
             if server.autostart:
                 return server
         return None
 
     def get_autostart_servers(self) -> list[ServerInfo]:
-        """Get all servers configured to auto-start."""
         return [server for server in self._servers.values() if server.autostart]
 
     def set_server_autostart(self, server_id: str, autostart: bool) -> tuple[bool, str | None]:
-        """Enable or disable autostart for a server. Returns (success, error_msg)."""
         info = self._servers.get(server_id)
         if not info:
             return False, _("Server not found.")
@@ -222,7 +185,6 @@ class ServerManager(EventEmitter):
         return True, None
 
     def update_server_ram(self, server_id: str, ram_mb: int):
-        """Update RAM allocation for a server."""
         info = self._servers.get(server_id)
         if info:
             info.ram_mb = ram_mb
@@ -233,7 +195,6 @@ class ServerManager(EventEmitter):
             self.emit_on_main_thread("server-changed", server_id)
 
     def update_server_version(self, server_id: str, mc_version: str) -> tuple[bool, str]:
-        """Update the Minecraft and Fabric version for a server."""
         return self.update_server_runtime(server_id, mc_version, None)
 
     def update_server_runtime(
@@ -245,7 +206,7 @@ class ServerManager(EventEmitter):
         compatibility_plan: dict | None = None,
         loader_type: str | None = None,
     ) -> tuple[bool, str]:
-        """Install a new Minecraft/loader runtime, update compatible content, and isolate incompatible content."""
+
         from niksnaks_hosting.shared.utils.constants import get_required_java_version
 
         info = self._servers.get(server_id)
@@ -261,13 +222,10 @@ class ServerManager(EventEmitter):
         if loader_version is not None:
             loader_version = str(loader_version or "").strip()
         elif target_loader != info.loader_type:
-            # The loader is being switched: the old loader's version string is
-            # meaningless for the new loader, so let the install path resolve a
-            # fresh Forge build / newest Fabric loader below.
+
             loader_version = ""
         elif target_loader == LOADER_FORGE:
-            # Same loader, but Forge builds are MC-specific across MC upgrades,
-            # so never reuse the previous MC's build when none was pinned.
+
             loader_version = ""
         else:
             loader_version = info.loader_version
@@ -277,7 +235,7 @@ class ServerManager(EventEmitter):
         try:
             java_req = get_required_java_version(mc_version)
         except Exception:
-            java_req = 21  # Default fallback
+            java_req = 21
 
         root = info.server_dir
         root.mkdir(parents=True, exist_ok=True)
@@ -305,7 +263,7 @@ class ServerManager(EventEmitter):
             forge_build = loader_version or self.download_manager.get_forge_recommended_build(mc_version)
             if not forge_build:
                 return False, _("No Forge build available for Minecraft {}").format(mc_version)
-            loader_version = forge_build  # persist the build actually installed
+            loader_version = forge_build
             full_version = get_forge_full_version(mc_version, forge_build)
 
             progress(0.28, _("Downloading Forge installer"))
@@ -316,8 +274,6 @@ class ServerManager(EventEmitter):
             if not installer_path:
                 return False, _("Failed to download Forge installer")
 
-            # Remove the old loader artifacts so the install is clean. The Forge
-            # installer fetches vanilla server.jar itself, so don't touch Mojang.
             for filename in ("server.jar", "fabric-server-launch.jar"):
                 try:
                     (root / filename).unlink(missing_ok=True)
@@ -394,8 +350,7 @@ class ServerManager(EventEmitter):
         disabled = self.isolate_incompatible_components(server_id, mc_version, plan)
 
         info.mc_version = mc_version
-        # Raise to the new MC's required Java, but never downgrade a Java
-        # version the user intentionally selected above the requirement.
+
         info.java_version = max(info.java_version, java_req)
         info.loader_type = target_loader
         info.loader_version = loader_version
@@ -464,7 +419,6 @@ class ServerManager(EventEmitter):
 
     @staticmethod
     def version_sort_key(value: str) -> tuple:
-        """Natural sort key for Minecraft/Fabric version strings."""
         text = str(value or "").strip().lower()
         parts: list[object] = []
         for token in re.findall(r"\d+|[a-z]+", text):
@@ -599,7 +553,6 @@ class ServerManager(EventEmitter):
         }
 
     def scan_update_compatibility(self, server_id: str, target_mc_version: str, loader_type: str | None = None) -> dict:
-        """Return compatible/incompatible tracked content for a target Minecraft version."""
         info = self._servers.get(server_id)
         if not info:
             empty = {"mods": [], "modpacks": [], "datapacks": []}
@@ -725,17 +678,13 @@ class ServerManager(EventEmitter):
     def apply_compatible_component_updates(
         self, server_id: str, target_mc_version: str, plan: dict | None = None, loader_type: str | None = None
     ) -> tuple[int, int]:
-        """Download compatible target-version Modrinth files and update Niksnaks-Hosting tracking."""
+
         info = self._servers.get(server_id)
         if not info:
             return 0, 0
 
         from niksnaks_hosting.shared.backend import modrinth_client
 
-        # Resolve dependencies with the *target* loader (the one the runtime is
-        # being updated to), not info.loader_type, which is only reassigned
-        # after this method returns -- otherwise a loader switch would fetch
-        # dependencies for the old loader.
         dep_loader = normalize_loader(loader_type) if loader_type else info.loader_type
 
         root = info.server_dir
@@ -881,7 +830,7 @@ class ServerManager(EventEmitter):
         target_mc_version: str,
         plan: dict | None = None,
     ) -> dict[str, list[dict[str, str]]]:
-        """Move tracked Modrinth mods/modpack files/datapacks that lack a compatible target version."""
+
         info = self._servers.get(server_id)
         if not info:
             return {"mods": [], "modpacks": [], "datapacks": []}
@@ -971,7 +920,7 @@ class ServerManager(EventEmitter):
         project_id: str = "",
         filename: str = "",
     ) -> tuple[bool, str]:
-        """Delete a file moved aside during version update and remove its disabled record."""
+
         info = self._servers.get(server_id)
         if not info:
             return False, _("Server not found")
@@ -1053,7 +1002,6 @@ class ServerManager(EventEmitter):
         return a + (0,) * (max_len - len(a)) < b + (0,) * (max_len - len(b))
 
     def restore_server(self, server_data: dict) -> bool:
-        """Restore a previously deleted server metadata entry."""
         try:
             info = ServerInfo(server_data)
         except Exception:
@@ -1068,7 +1016,6 @@ class ServerManager(EventEmitter):
         return True
 
     def delete_server(self, server_id: str, delete_files: bool = True):
-        """Delete a server. Optionally delete its files."""
         info = self._servers.get(server_id)
         if not info:
             return
@@ -1076,7 +1023,6 @@ class ServerManager(EventEmitter):
         if self.playit_manager.is_running_for(server_id):
             self.playit_manager.stop_server(server_id)
 
-        # Stop if running
         process = self._processes.get(server_id)
         if process and process.is_running:
             process.kill()
@@ -1084,7 +1030,6 @@ class ServerManager(EventEmitter):
         if server_id in self._processes:
             del self._processes[server_id]
 
-        # Delete files
         if delete_files and info.server_dir.exists():
             shutil.rmtree(info.server_dir, ignore_errors=True)
 
@@ -1093,7 +1038,6 @@ class ServerManager(EventEmitter):
         self.emit_on_main_thread("server-removed", server_id)
 
     def get_process(self, server_id: str) -> ServerProcess | None:
-        """Get or create a ServerProcess for a server."""
         info = self._servers.get(server_id)
         if not info:
             return None
@@ -1121,33 +1065,27 @@ class ServerManager(EventEmitter):
         return self._processes[server_id]
 
     def get_existing_process(self, server_id: str) -> ServerProcess | None:
-        """Get an existing ServerProcess without creating a new one."""
         return self._processes.get(server_id)
 
     def get_config(self, server_id: str) -> ConfigManager | None:
-        """Get a ConfigManager for a server's server.properties."""
         info = self._servers.get(server_id)
         if not info:
             return None
         return ConfigManager(str(info.server_dir))
 
     def is_any_server_running(self) -> bool:
-        """Check if any server is currently running."""
         return any(p.is_running for p in self._processes.values())
 
     def get_running_server_ids(self) -> list[str]:
-        """Return all server ids whose processes are running."""
         return [sid for sid, p in self._processes.items() if p.is_running]
 
     def get_running_server_id(self) -> str | None:
-        """Return the first running server id, or None."""
         for server_id, process in self._processes.items():
             if process.is_running:
                 return server_id
         return None
 
     def get_used_ports(self) -> set[int]:
-        """Return ports in use by all servers' server.properties."""
         ports: set[int] = set()
         for sid, info in self._servers.items():
             try:
@@ -1162,7 +1100,6 @@ class ServerManager(EventEmitter):
         return ports
 
     def get_used_bedrock_ports(self) -> set[int]:
-        """Return the set of bedrock ports configured across all servers."""
         ports: set[int] = set()
         for sid, info in self._servers.items():
             try:
@@ -1175,7 +1112,6 @@ class ServerManager(EventEmitter):
         return ports
 
     def get_used_voicechat_ports(self) -> set[int]:
-        """Return the set of voicechat ports configured across all servers."""
         ports: set[int] = set()
         for sid, info in self._servers.items():
             try:
@@ -1188,7 +1124,6 @@ class ServerManager(EventEmitter):
         return ports
 
     def get_next_available_bedrock_port(self) -> int:
-        """Find the next unused bedrock port starting from 19132."""
         used = self.get_used_bedrock_ports()
         port = 19132
         while port in used:
@@ -1196,7 +1131,6 @@ class ServerManager(EventEmitter):
         return port
 
     def get_next_available_voicechat_port(self) -> int:
-        """Find the next unused voicechat port starting from 24454."""
         used = self.get_used_voicechat_ports()
         port = 24454
         while port in used:
@@ -1204,7 +1138,6 @@ class ServerManager(EventEmitter):
         return port
 
     def get_next_available_port(self, base: int = 25565) -> int:
-        """Find the next unused port starting from base."""
         used = self.get_used_ports()
         port = base
         while port in used:
@@ -1212,7 +1145,6 @@ class ServerManager(EventEmitter):
         return port
 
     def set_java_port(self, server_id: str, port: int) -> None:
-        """Set the server port in server.properties."""
         info = self._servers.get(server_id)
         if not info:
             return
@@ -1223,7 +1155,6 @@ class ServerManager(EventEmitter):
             cfg.save()
 
     def get_bedrock_port(self, server_id: str) -> int:
-        """Read the bedrock port from the server's playit config."""
         info = self._servers.get(server_id)
         if not info:
             return 19132
@@ -1234,7 +1165,6 @@ class ServerManager(EventEmitter):
             return 19132
 
     def get_voicechat_port(self, server_id: str) -> int:
-        """Read the voicechat port from the server's playit config."""
         info = self._servers.get(server_id)
         if not info:
             return 24454
@@ -1245,7 +1175,6 @@ class ServerManager(EventEmitter):
             return 24454
 
     def set_bedrock_port(self, server_id: str, port: int) -> None:
-        """Set the bedrock port in the server's playit config."""
         info = self._servers.get(server_id)
         if not info:
             return
@@ -1256,7 +1185,6 @@ class ServerManager(EventEmitter):
         save_playit_config(info.server_dir, cfg)
 
     def set_voicechat_port(self, server_id: str, port: int) -> None:
-        """Set the voicechat port in the server's playit config."""
         info = self._servers.get(server_id)
         if not info:
             return
@@ -1267,7 +1195,6 @@ class ServerManager(EventEmitter):
         save_playit_config(info.server_dir, cfg)
 
     def check_bedrock_port_conflict(self, server_id: str) -> int | None:
-        """Return the port if another running server uses the same bedrock port."""
         port = self.get_bedrock_port(server_id)
         if not self.has_bedrock_tunnel(server_id):
             for sid in self._servers:
@@ -1286,7 +1213,6 @@ class ServerManager(EventEmitter):
         return None
 
     def check_voicechat_port_conflict(self, server_id: str) -> int | None:
-        """Return the port if another running server uses the same voicechat port."""
         port = self.get_voicechat_port(server_id)
         if not self.has_voicechat_tunnel(server_id):
             for sid in self._servers:
@@ -1305,10 +1231,9 @@ class ServerManager(EventEmitter):
         return None
 
     def resolve_playit_port_conflicts(self, server_id: str) -> None:
-        """No-op: port conflicts are no longer auto-resolved."""
+        pass
 
     def has_bedrock_tunnel(self, server_id: str) -> bool:
-        """Check if a server has a bedrock tunnel configured."""
         info = self._servers.get(server_id)
         if not info:
             return False
@@ -1319,7 +1244,6 @@ class ServerManager(EventEmitter):
             return False
 
     def has_voicechat_tunnel(self, server_id: str) -> bool:
-        """Check if a server has a voicechat tunnel configured."""
         info = self._servers.get(server_id)
         if not info:
             return False
@@ -1330,7 +1254,6 @@ class ServerManager(EventEmitter):
             return False
 
     def check_port_conflict(self, server_id: str) -> int | None:
-        """Return the conflicting port if another running server uses this server's port, else None."""
         info = self._servers.get(server_id)
         if not info:
             return None
@@ -1358,7 +1281,6 @@ class ServerManager(EventEmitter):
         return None
 
     def begin_mod_operation(self, server_id: str) -> None:
-        """Mark a server as having an active mod install/update operation."""
         if not server_id:
             return
         count = int(self._mods_operation_counts.get(server_id, 0)) + 1
@@ -1366,7 +1288,6 @@ class ServerManager(EventEmitter):
         self.emit_on_main_thread("mods-operation-changed", server_id, True, count)
 
     def end_mod_operation(self, server_id: str) -> None:
-        """Clear one active mod install/update operation for a server."""
         if not server_id:
             return
         count = int(self._mods_operation_counts.get(server_id, 0)) - 1
@@ -1380,18 +1301,16 @@ class ServerManager(EventEmitter):
         self.emit_on_main_thread("mods-operation-changed", server_id, active, count)
 
     def is_mod_operation_active(self, server_id: str) -> bool:
-        """True while any mod install/update operation is active for this server."""
         if not server_id:
             return False
         return int(self._mods_operation_counts.get(server_id, 0)) > 0
 
     def stop_all(self):
-        """Stop all running servers."""
         self.playit_manager.stop()
         for server_id, process in self._processes.items():
             if process.is_running:
                 process.stop()
-                # Wait up to 3 seconds for graceful shutdown, then forcefully kill to prevent orphans
+
                 try:
                     process.process.wait(timeout=3.0)
                 except Exception:
@@ -1399,7 +1318,6 @@ class ServerManager(EventEmitter):
                 process.kill()
 
     def _configured_level_name(self, server_root: Path) -> str:
-        """Read level-name from server.properties, defaulting to world."""
         try:
             cfg = ConfigManager(server_root)
             cfg.load()
@@ -1487,7 +1405,6 @@ class ServerManager(EventEmitter):
         return candidate
 
     def create_world_folder(self, server_id: str, name: str, seed: str = "", level_type: str = "") -> tuple[bool, str]:
-        """Create/select a new world folder and configure the server to generate it."""
         info = self.get_server(server_id)
         if not info:
             return False, _("Server not found")
@@ -1527,7 +1444,6 @@ class ServerManager(EventEmitter):
         return True, world_dir.name
 
     def import_world_folder(self, server_id: str, source: str | Path) -> tuple[bool, str]:
-        """Copy an existing world folder into a server and select it as level-name."""
         info = self.get_server(server_id)
         if not info:
             return False, _("Server not found")
@@ -1581,7 +1497,6 @@ class ServerManager(EventEmitter):
         return True, dst.name
 
     def export_world_zip(self, server_id: str, world: str | Path, destination: str | Path) -> tuple[bool, str]:
-        """Export one world folder to a zip archive."""
         info = self.get_server(server_id)
         if not info:
             return False, _("Server not found")
@@ -1615,7 +1530,6 @@ class ServerManager(EventEmitter):
         return True, str(dest)
 
     def create_world_backup(self, server_id: str, auto: bool = False) -> tuple[bool, str]:
-        """Create a zip backup containing world folders only."""
         info = self.get_server(server_id)
         if not info:
             return False, _("Server not found")
@@ -1654,8 +1568,6 @@ class ServerManager(EventEmitter):
         return True, backup_path.name
 
     def create_full_backup(self, server_id: str) -> tuple[bool, str]:
-        """Create a zip backup containing everything in the server directory,
-        specifically tailored for version updates."""
         info = self.get_server(server_id)
         if not info:
             return False, _("Server not found")
@@ -1673,7 +1585,6 @@ class ServerManager(EventEmitter):
 
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
-        # Tag the backup with the current server version
         version = info.mc_version if info.mc_version else "unknown"
         backup_path = backups_dir / f"niksnaks-hosting-full-backup-{version}-{stamp}.zip"
 
@@ -1682,10 +1593,10 @@ class ServerManager(EventEmitter):
                 for item in root.rglob("*"):
                     if not item.is_file():
                         continue
-                    # Skip the backups folder itself
+
                     if hasattr(item, "is_relative_to") and item.is_relative_to(backups_dir):
                         continue
-                    elif str(item).startswith(str(backups_dir)):  # fallback
+                    elif str(item).startswith(str(backups_dir)):
                         continue
 
                     arc = item.relative_to(root)
@@ -1697,7 +1608,6 @@ class ServerManager(EventEmitter):
         return True, backup_path.name
 
     def _cleanup_old_backups(self, server_id: str) -> None:
-        """Remove backup zips older than 30 days if the preference is enabled."""
         if not self.preferences.auto_delete_old_backups:
             return
         info = self.get_server(server_id)
@@ -1706,20 +1616,18 @@ class ServerManager(EventEmitter):
         backups_dir = info.server_dir / BACKUPS_DIR
         if not backups_dir.exists():
             return
-        cutoff = datetime.now(timezone.utc) - timedelta(days=30)  # noqa: UP017
+        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
         for p in backups_dir.iterdir():
             if p.suffix != ".zip":
                 continue
             try:
-                mtime = datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc)  # noqa: UP017
+                mtime = datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc)
                 if mtime < cutoff:
                     p.unlink()
             except OSError:
                 continue
 
     def restore_world_backup(self, server_id: str, zip_path: Path) -> tuple[bool, str]:
-        """Restore a zip backup. If it's a full backup, it overwrites everything
-        except backups. Otherwise, it just replaces worlds."""
         import shutil
         import tempfile
 
@@ -1753,7 +1661,7 @@ class ServerManager(EventEmitter):
                     zf.extractall(tmp_root)
 
                 if is_full:
-                    # Nuke everything in root except the backup folders, then copy all
+
                     for item in root.iterdir():
                         if item.name in BACKUP_DIR_NAMES:
                             continue
@@ -1769,7 +1677,7 @@ class ServerManager(EventEmitter):
                         else:
                             shutil.copy2(item, dst)
                 else:
-                    # Just restore worlds
+
                     extracted_worlds = self._iter_world_dirs(tmp_root)
                     if not extracted_worlds:
                         return False, _("This backup does not contain any world data.")

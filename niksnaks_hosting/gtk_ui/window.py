@@ -1,7 +1,3 @@
-"""
-NiksnaksHostingWindow - Main application window with NavigationSplitView.
-"""
-
 import threading
 
 import gi
@@ -17,10 +13,7 @@ from niksnaks_hosting.shared.backend.playit_config import load_playit_config
 from niksnaks_hosting.shared.backend.server_manager import ServerManager
 from niksnaks_hosting.shared.utils.constants import APP_ID
 
-
 class NiksnaksHostingWindow(Adw.ApplicationWindow):
-    """Main Niksnaks-Hosting application window."""
-
     def __init__(self, server_manager: ServerManager, **kwargs):
         super().__init__(**kwargs)
         self._server_manager = server_manager
@@ -39,35 +32,28 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         self.set_size_request(400, 400)
         self.add_css_class("niksnaks-hosting-window")
 
-        # Toast overlay wraps everything
         self._toast_overlay = Adw.ToastOverlay()
 
-        # OverlaySplitView
         self._split_view = Adw.OverlaySplitView()
         self._split_view.set_pin_sidebar(True)
         self._split_view.set_show_sidebar(True)
 
-        # ===== Sidebar =====
         self._sidebar = Sidebar(server_manager)
         self._sidebar.connect("server-selected", self._on_server_selected)
         self._split_view.set_sidebar(self._sidebar)
 
-        # ===== Content =====
         self._content_stack = Gtk.Stack()
         self._content_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self._content_stack.set_transition_duration(200)
 
-        # Welcome view
         self._welcome_view = WelcomeView()
         self._content_stack.add_named(self._welcome_view, "welcome")
 
-        # Server detail view
         self._detail_view = ServerDetailView(server_manager, toast_overlay=self._toast_overlay)
         self._content_stack.add_named(self._detail_view, "detail")
 
         self._split_view.set_content(self._content_stack)
 
-        # Responsive breakpoint
         breakpoint = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("max-width: 600sp"))
         breakpoint.add_setter(self._split_view, "collapsed", True)
         self.add_breakpoint(breakpoint)
@@ -75,7 +61,6 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         self._toast_overlay.set_child(self._split_view)
         self.set_content(self._toast_overlay)
 
-        # Sidebar toggle buttons for desktop mode
         self._welcome_sidebar_toggle = Gtk.ToggleButton()
         self._welcome_sidebar_toggle.set_icon_name("sidebar-show-symbolic")
         self._welcome_sidebar_toggle.set_tooltip_text(_("Toggle Sidebar"))
@@ -86,7 +71,6 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         self._detail_sidebar_toggle.set_tooltip_text(_("Toggle Sidebar"))
         self._detail_view.header.pack_start(self._detail_sidebar_toggle)
 
-        # Bind toggles to show-sidebar property
         self._split_view.bind_property(
             "show-sidebar",
             self._welcome_sidebar_toggle,
@@ -100,14 +84,12 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
             GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE,
         )
 
-        # Show welcome or auto-select first server immediately to avoid welcome flicker.
         if server_manager.servers:
             first_id = server_manager.servers[0].id
             self._sidebar.select_server(first_id)
         else:
             self._content_stack.set_visible_child_name("welcome")
 
-        # Connect server add to switch content
         server_manager.connect("server-added", self._on_server_added)
         server_manager.connect("server-removed", self._on_server_removed)
 
@@ -152,25 +134,22 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
                     app.hold()
                     app._is_held_for_background = True
 
-            return True  # stop close
+            return True
 
         app = self.get_application()
         if hasattr(app, "_is_held_for_background") and app._is_held_for_background:
             app.release()
             app._is_held_for_background = False
 
-        return False  # continue close
+        return False
 
     def _on_close_window(self, action, param):
-        """Close the current window."""
         self.close()
 
     def _on_show_menu(self, action, param):
-        """Open the primary app menu."""
         self._sidebar.popup_main_menu()
 
     def _on_server_selected(self, sidebar, server_id):
-        """Handle server selection from sidebar."""
         if not server_id:
             self._content_stack.set_visible_child_name("welcome")
             return
@@ -182,27 +161,21 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
             self._detail_view.load_server(server_info)
             self._content_stack.set_visible_child_name("detail")
 
-            # Hide sidebar in collapsed mode
             if self._split_view.get_collapsed():
                 self._split_view.set_show_sidebar(False)
 
     def _on_server_added(self, manager, server_id):
-        """Handle new server added - switch to it."""
-        # The sidebar handles adding the row and selecting it
         pass
 
     def _on_server_removed(self, manager, server_id):
-        """Return to welcome when current selection is removed or list is empty."""
         if self._current_server_id == server_id or not self._server_manager.servers:
             self._current_server_id = None
             self._content_stack.set_visible_child_name("welcome")
 
     def restore_from_background(self):
-        """Compatibility no-op after removing background mode."""
         return
 
     def shutdown_background(self):
-        """Compatibility no-op after removing background mode."""
         if self._status_poll_id:
             GLib.source_remove(self._status_poll_id)
             self._status_poll_id = None
@@ -221,7 +194,6 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         else:
             set_background_status(_("Server not running"))
 
-        # Servers that stopped since last poll
         stopped_ids = previous_ids - current_ids
         for sid in stopped_ids:
             self._apply_playit_runtime(sid, "stop")
@@ -229,12 +201,10 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
             if prefs.auto_backup_on_stop:
                 self._start_auto_backup(sid)
 
-        # Servers that started since last poll
         started_ids = current_ids - previous_ids
         for sid in started_ids:
             self._apply_playit_runtime(sid, "start")
 
-        # Keep playit in sync for all running servers
         for sid in current_ids:
             self._apply_playit_runtime(sid, None)
 
@@ -249,7 +219,6 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
     def _apply_playit_runtime(self, server_id: str, action: str | None):
         playit = self._server_manager.playit_manager
 
-        # Handle explicit stop action
         if action == "stop":
             if playit.is_running_for(server_id):
                 playit.stop_server(server_id)
@@ -257,7 +226,6 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
             self._playit_starting_server_ids.discard(server_id)
             return
 
-        # Handle explicit start action or keep-alive check
         if server_id in self._playit_autostart_paused_ids:
             return
 
@@ -327,7 +295,7 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         on_button=None,
         timeout: int = 3,
     ):
-        """Show a toast notification."""
+
         toast = Adw.Toast(title=message)
         toast.set_timeout(max(1, int(timeout)))
         if button_label:

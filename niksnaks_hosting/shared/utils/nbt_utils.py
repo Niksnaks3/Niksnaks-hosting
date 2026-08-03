@@ -2,7 +2,6 @@ import gzip
 import struct
 from pathlib import Path
 
-
 class _NbtReader:
     def __init__(self, data: bytes):
         self.data = data
@@ -71,7 +70,6 @@ class _NbtReader:
             return None
         raise ValueError(f"Unsupported NBT tag {tag_type}")
 
-
 def _read_nbt_file(nbt_file: Path) -> dict | None:
     if not nbt_file.is_file():
         return None
@@ -90,10 +88,7 @@ def _read_nbt_file(nbt_file: Path) -> dict | None:
     except Exception:
         return None
 
-
 def get_world_seed(world_dir: Path) -> str:
-    """Return the seed stored in level.dat when it can be read."""
-
     def _extract_seed(node) -> str:
         if isinstance(node, dict):
             lower_map = {str(key).casefold(): value for key, value in node.items()}
@@ -134,17 +129,13 @@ def get_world_seed(world_dir: Path) -> str:
                 return s
     return ""
 
-
 def get_world_type(world_dir: Path) -> str:
-    """Return the world type from level.dat (e.g. minecraft\\:normal)."""
-
     def _extract_type(node) -> str:
         if not isinstance(node, dict):
             return ""
 
         lower_map = {str(k).casefold(): v for k, v in node.items()}
 
-        # Legacy
         if "generatorname" in lower_map:
             gn = str(lower_map["generatorname"]).lower()
             if gn == "flat":
@@ -156,7 +147,6 @@ def get_world_type(world_dir: Path) -> str:
             if gn == "default":
                 return "minecraft\\:normal"
 
-        # Modern
         dims = lower_map.get("dimensions")
         if isinstance(dims, dict):
             dims_lower = {str(k).casefold(): v for k, v in dims.items()}
@@ -210,7 +200,5 @@ def get_world_type(world_dir: Path) -> str:
                 return t
     return ""
 
-
 def get_world_info(world_dir: Path) -> tuple[str, str]:
-    """Returns (seed, type)."""
     return get_world_seed(world_dir), get_world_type(world_dir)

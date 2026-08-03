@@ -1,7 +1,3 @@
-"""
-Application preferences window
-"""
-
 from __future__ import annotations
 
 import os
@@ -19,7 +15,6 @@ from niksnaks_hosting.shared.backend.preferences_manager import PreferencesManag
 from niksnaks_hosting.shared.backend.server_manager import ServerManager
 from niksnaks_hosting.shared.utils.constants import DATA_DIR
 
-
 def _open_data_folder() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -29,13 +24,10 @@ def _open_data_folder() -> None:
 
     Gio.AppInfo.launch_default_for_uri(DATA_DIR.as_uri())
 
-
 def show_preferences_window(
     parent: Gtk.Window, preferences: PreferencesManager, server_manager: ServerManager | None = None
 ):
     win = Adw.PreferencesDialog()
-    # Properties like default_size or modal are handled differently in Adw.Dialog
-    # if at all, but we can set them if supported or skip them.
 
     page = Adw.PreferencesPage(title=_("General"))
     group = Adw.PreferencesGroup(
@@ -69,7 +61,7 @@ def show_preferences_window(
             startup_row.set_active(False)
 
         if active:
-            # If turning on background
+
             from niksnaks_hosting.shared.utils.portal import request_background
 
             def on_bg_response(success, bg, auto, err):

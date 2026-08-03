@@ -8,12 +8,7 @@ PORTAL_OBJECT_PATH = "/org/freedesktop/portal/desktop"
 BACKGROUND_INTERFACE = "org.freedesktop.portal.Background"
 REQUEST_INTERFACE = "org.freedesktop.portal.Request"
 
-
 def request_background(autostart: bool, callback: callable) -> None:
-    """
-    Request background permission via xdg-desktop-portal.
-    callback gets: (success: bool, background_granted: bool, autostart_granted: bool, error_msg: str)
-    """
     if sys.platform == "win32":
         try:
             import winreg
@@ -122,9 +117,7 @@ def request_background(autostart: bool, callback: callable) -> None:
             subscription_id = None
         callback(False, False, False, f"Failed to request background: {e}")
 
-
 def set_background_status(message: str) -> None:
-    """Set the background status message."""
     if sys.platform == "win32":
         try:
             app = Gio.Application.get_default()

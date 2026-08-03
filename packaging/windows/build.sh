@@ -1,11 +1,4 @@
 #!/usr/bin/env bash
-# Build the Windows app bundle and installer.
-#
-# Run from an MSYS2 UCRT64 shell:
-#   ./packaging/windows/build.sh
-#
-# Produces dist/Niksnaks-Hosting/ (portable folder) and
-# dist/Niksnaks-Hosting-<version>-Setup.exe (installer).
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -14,7 +7,6 @@ cd "$PROJECT_ROOT"
 PREFIX="${MSYS_PREFIX:-/ucrt64}"
 ICO="build/Niksnaks-Hosting.ico"
 
-# Inno Setup installs machine-wide or per-user depending on how it was installed.
 if [[ -z "${ISCC:-}" ]]; then
   for candidate in \
     "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" \

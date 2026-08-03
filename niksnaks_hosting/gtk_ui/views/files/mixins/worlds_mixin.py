@@ -1,7 +1,3 @@
-"""
-FilesView -- folders, worlds, backups, and Modrinth integration (per selected server).
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -19,7 +15,6 @@ from niksnaks_hosting.shared.utils.constants import LEVEL_TYPE_NAMES, LEVEL_TYPE
 from niksnaks_hosting.shared.utils.nbt_utils import get_world_info
 
 from ..utils import *
-
 
 class WorldsMixin:
     def _configured_world_seed(self) -> str:
@@ -84,7 +79,6 @@ class WorldsMixin:
     def _build_world_page(self, path: Path, show_controls: bool = False) -> Gtk.Widget:
         page = Adw.PreferencesPage()
 
-        # World Info
         seed, wtype = get_world_info(path)
         if not seed:
             seed = self._configured_world_seed()
@@ -111,7 +105,6 @@ class WorldsMixin:
 
             page.add(info_group)
 
-        # Actions
         actions_group = Adw.PreferencesGroup(title=_("Actions"))
 
         open_row = Adw.ActionRow(title=_("Open World Folder"))
@@ -141,7 +134,6 @@ class WorldsMixin:
 
         page.add(actions_group)
 
-        # Dimensions
         dims_group = Adw.PreferencesGroup(title=_("Dimensions"))
         dims = _world_dimension_dirs(path)
         if not dims:
@@ -171,9 +163,6 @@ class WorldsMixin:
         sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         sw.set_child(page)
 
-        # We need a subpage shell for proper rendering. Assuming it exists in mixin or parent view.
-        # But wait, `_build_subpage_shell` is in BackupsMixin. Let's see if we can use it.
-        # If FilesView inherits both, self._build_subpage_shell is available.
         shell_title = _("World") if path.name == "world" else path.name
         return self._build_subpage_shell(shell_title, sw, show_controls=show_controls)
 
@@ -181,8 +170,6 @@ class WorldsMixin:
         clipboard = Gdk.Display.get_default().get_clipboard()
         clipboard.set(seed)
         self._toast(_("World seed copied"))
-
-    # We removed _on_world_settings as its content is now in the page.
 
     def _on_reset_world(self, path: Path) -> None:
         if self._is_running():

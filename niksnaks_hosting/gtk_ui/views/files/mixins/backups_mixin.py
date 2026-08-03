@@ -1,7 +1,3 @@
-"""
-FilesView -- folders, worlds, backups, and Modrinth integration (per selected server).
-"""
-
 from __future__ import annotations
 
 import shutil
@@ -28,7 +24,6 @@ from niksnaks_hosting.shared.utils.migration import BACKUPS_DIR, LEGACY_BACKUPS_
 
 from ..utils import *
 
-
 class BackupsMixin:
     def _backups_dir(self) -> Path | None:
         root = self._server_dir()
@@ -36,7 +31,7 @@ class BackupsMixin:
             return None
         d = root / BACKUPS_DIR
         if not d.exists() and (root / LEGACY_BACKUPS_DIR).is_dir():
-            # Server directory still carries pre-rename backups; adopt them.
+
             migrate_server_dir(root)
         d.mkdir(parents=True, exist_ok=True)
         return d
@@ -137,7 +132,6 @@ class BackupsMixin:
         st = zp.stat()
         row = Adw.ActionRow(title=zp.name)
 
-        # Check if it's a full backup and has a version in the filename
         version_str = ""
         if zp.name.startswith(FULL_BACKUP_PREFIXES):
             version = ServerManager.backup_game_version(zp)
@@ -328,7 +322,7 @@ class BackupsMixin:
 
                     is_full = zp.name.startswith(FULL_BACKUP_PREFIXES)
                     if is_full:
-                        # Nuke everything in root except the backup folders, then copy all
+
                         for item in root.iterdir():
                             if item.name in BACKUP_DIR_NAMES:
                                 continue

@@ -1,8 +1,3 @@
-"""
-Image utility functions for Niksnaks-Hosting.
-Handles image cropping, conversion, and loading for GTK display.
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -22,28 +17,13 @@ except ImportError:
     Gdk = None
     Gtk = None
 
-
 def crop_to_square(input_path: str, x: int, y: int, size: int) -> Image.Image:
-    """Crop an image to a square region."""
     img = Image.open(input_path)
     img = img.convert("RGBA")
     cropped = img.crop((x, y, x + size, y + size))
     return cropped
 
-
 def convert_to_png(input_path: str, output_path: str, size: int = 128, crop_box: tuple = None) -> str:
-    """
-    Convert an image to PNG format, optionally cropping and resizing.
-
-    Args:
-        input_path: Path to the source image.
-        output_path: Path to save the PNG.
-        size: Output size (square).
-        crop_box: Optional (x, y, width, height) crop region.
-
-    Returns:
-        The output_path.
-    """
     img = Image.open(input_path)
     img = img.convert("RGBA")
 
@@ -51,7 +31,7 @@ def convert_to_png(input_path: str, output_path: str, size: int = 128, crop_box:
         x, y, w, h = crop_box
         img = img.crop((x, y, x + w, y + h))
     else:
-        # Auto-crop to center square
+
         w, h = img.size
         min_dim = min(w, h)
         left = (w - min_dim) // 2
@@ -62,15 +42,7 @@ def convert_to_png(input_path: str, output_path: str, size: int = 128, crop_box:
     img.save(output_path, "PNG")
     return output_path
 
-
 def write_minecraft_server_icon(source_icon_path: str, server_dir, size: int = 64) -> str | None:
-    """Write a Minecraft multiplayer ``server-icon.png`` into a server directory.
-
-    The vanilla Minecraft server reads ``server-icon.png`` from the server root
-    and serves it to clients as the server's picture in the multiplayer server
-    list. It must be a PNG and is expected to be 64x64. This downscales an
-    existing (square) icon -- typically Niksnaks-Hosting's ``icon.png`` -- to 64x64.
-    """
     try:
         server_dir = Path(server_dir)
         server_dir.mkdir(parents=True, exist_ok=True)
@@ -82,9 +54,7 @@ def write_minecraft_server_icon(source_icon_path: str, server_dir, size: int = 6
     except Exception:
         return None
 
-
 def load_pixbuf(path: str, size: int = 128) -> GdkPixbuf.Pixbuf | None:
-    """Load an image file as a GdkPixbuf at the given size."""
     if GdkPixbuf is None:
         return None
     try:
@@ -93,9 +63,7 @@ def load_pixbuf(path: str, size: int = 128) -> GdkPixbuf.Pixbuf | None:
     except Exception:
         return None
 
-
 def create_texture_from_file(path: str, size: int = 128) -> Gdk.Texture | None:
-    """Load an image file as a Gdk.Texture."""
     if Gdk is None:
         return None
     try:
@@ -106,13 +74,11 @@ def create_texture_from_file(path: str, size: int = 128) -> Gdk.Texture | None:
         pass
     return None
 
-
 def get_default_server_icon_pixbuf(size: int = 48) -> GdkPixbuf.Pixbuf | None:
-    """Create a default server icon (simple colored square)."""
     if GdkPixbuf is None:
         return None
-    # Create a simple colored pixbuf as default
+
     pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, True, 8, size, size)
-    # Fill with a nice purple/blue color
+
     pixbuf.fill(0x7C6BF0FF)
     return pixbuf

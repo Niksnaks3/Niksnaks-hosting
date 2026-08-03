@@ -1,7 +1,3 @@
-"""
-FilesView -- folders, worlds, backups, and Modrinth integration (per selected server).
-"""
-
 from __future__ import annotations
 
 import ast
@@ -20,7 +16,6 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Adw, GLib, Gtk
 
 from ..utils import *
-
 
 class ModsMixin:
     def _begin_mod_operation(self) -> str | None:
@@ -69,11 +64,10 @@ class ModsMixin:
         return root / ".niksnaks-hosting-datapack-installs.json"
 
     def _datapacks_dir(self) -> Path | None:
-        """Return the active datapacks directory (world/datapacks), creating parent if needed."""
         root = self._server_dir()
         if not root:
             return None
-        # Try to find the active world folder from server.properties
+
         world_name = "world"
         props = root / "server.properties"
         if props.exists():
@@ -252,7 +246,7 @@ class ModsMixin:
                             continue
 
                         item = value
-                        # Recover from older buggy state where a dict was stringified.
+
                         if isinstance(item, str):
                             text = item.strip()
                             if text.startswith("{") and text.endswith("}"):
@@ -282,7 +276,7 @@ class ModsMixin:
                                 "mods": mods,
                             }
                         else:
-                            # Legacy minimal state: project -> version_id
+
                             normalized[pid] = {
                                 "version_id": str(item).strip(),
                                 "version_number": "",
@@ -466,7 +460,6 @@ class ModsMixin:
         return pid in entries
 
     def _find_mod_jar_path(self, mods_dir: Path, filename: str) -> Path | None:
-        """Resolve a jar path by filename, with case-insensitive fallback."""
         name = str(filename).strip()
         if not name:
             return None
@@ -488,7 +481,6 @@ class ModsMixin:
 
         self._remove_mod_from_dependency_state(removed_filename)
 
-        # Remove from standalone install tracking.
         standalone = self._read_individual_mod_state()
         mods = dict(standalone.get("mods", {}))
         kept = {}
@@ -499,7 +491,6 @@ class ModsMixin:
             kept[project_id] = meta
         self._write_individual_mod_state({"mods": kept})
 
-        # Remove from any modpack-managed mod list if manually deleted.
         entries = self._modpack_entries()
         projects_payload: dict[str, dict[str, Any]] = {}
         for project_id, entry in entries.items():
@@ -670,7 +661,6 @@ class ModsMixin:
         return [p for p in parents if p in installed]
 
     def _cleanup_orphaned_dependencies(self, removed_mod_filename: str) -> None:
-        """Remove dependency files that are no longer needed after a mod is deleted."""
         removed_key = str(removed_mod_filename).strip().lower()
         if not removed_key:
             return
@@ -686,23 +676,20 @@ class ModsMixin:
         state = self._read_mod_dependency_state()
         req = state.get("required_by", {})
 
-        # Collect all dependencies that need to be checked
         deps_to_check = []
 
-        # Find dependencies that this mod required
         for dep_key, parents in req.items():
             if removed_key not in parents:
                 continue
             deps_to_check.append(dep_key)
 
-        # Now check each dependency to see if it's still needed by other mods
         for dep_key in deps_to_check:
             parents = req.get(dep_key, [])
-            # Remove the old parent from the parents list
+
             remaining_parents = [p for p in parents if p != removed_key]
 
             if not remaining_parents:
-                # This dependency is now orphaned, try to remove it
+
                 try:
                     dep_path = self._find_mod_jar_path(mods_dir, dep_key)
                     if dep_path and dep_path.exists():
@@ -711,7 +698,6 @@ class ModsMixin:
                     pass
 
     def _make_mod_row(self, jar: Path) -> Adw.ActionRow:
-        # Try to find metadata for this jar
         filename_lower = jar.name.lower()
         mod_state = self._read_individual_mod_state().get("mods", {})
 
@@ -928,12 +914,11 @@ class ModsMixin:
                 if newer:
                     modpack_updates.append((project_id, entry, newer))
 
-            # Check standalone updates
             standalone_updates = []
             blocked = 0
             for project_id, meta in individual_state.items():
                 current_version = str((meta or {}).get("version_id", "")).strip()
-                # Find a compatible mod version for this server's loader
+
                 latest = modrinth_client.find_compatible_version(
                     project_id,
                     mc_version,
@@ -942,11 +927,9 @@ class ModsMixin:
                 if not latest:
                     continue
 
-                # Ensure the compatible version is actually a mod (has loaders)
                 if not latest.loaders or len(latest.loaders) == 0:
                     continue
 
-                # Update metadata if missing (backfilling)
                 if not (meta or {}).get("version_number") or not (meta or {}).get("title"):
                     title_to_record = (meta or {}).get("title")
                     if not title_to_record:
@@ -980,22 +963,20 @@ class ModsMixin:
 
                 standalone_updates.append((project_id, meta, latest, deps))
 
-            # Check datapack updates (datapacks have no loader requirement)
             datapack_updates = []
             for project_id, meta in datapack_state.items():
                 current_version = str((meta or {}).get("version_id", "")).strip()
                 versions = modrinth_client.get_project_versions(project_id)
-                # Filter to only datapack versions (no loaders)
+
                 datapack_versions = [v for v in versions if not v.loaders or len(v.loaders) == 0]
                 compatible = [v for v in datapack_versions if not mc_version or mc_version in (v.game_versions or [])]
                 if not compatible:
-                    # Fall back to any datapack version without MC version requirement
+
                     compatible = datapack_versions
                 if not compatible:
                     continue
                 latest = compatible[0]
 
-                # Update metadata if missing (backfilling)
                 if not (meta or {}).get("version_number") or not (meta or {}).get("title"):
                     title_to_record = (meta or {}).get("title")
                     if not title_to_record:
@@ -1151,7 +1132,6 @@ class ModsMixin:
         applied = 0
         failed = 0
 
-        # Apply modpack updates first so pack-managed versions remain authoritative.
         for index, (project_id, entry, newer_version) in enumerate(modpack_updates, start=1):
             pack_title = str(entry.get("title", "")).strip() or project_id
             GLib.idle_add(
@@ -1203,7 +1183,6 @@ class ModsMixin:
 
         managed_mods = set(self._modpack_managed_mod_map().keys())
 
-        # Apply standalone updates, installing required dependencies first.
         for index, (project_id, meta, latest, deps) in enumerate(standalone_updates, start=1):
             mod_title = str((meta or {}).get("title", "")).strip() or project_id
             GLib.idle_add(
@@ -1215,25 +1194,22 @@ class ModsMixin:
                 old_name = str((meta or {}).get("filename", "")).strip()
                 deps_to_install = [dep for dep in deps if str(dep.filename).strip().lower() not in managed_mods]
 
-                # Get old dependencies from state before updating
                 old_dep_names = set()
                 dep_state = self._read_mod_dependency_state()
                 for dep_key, parents in dep_state.get("required_by", {}).items():
                     if old_name.lower() in [p.lower() for p in parents]:
                         old_dep_names.add(dep_key)
 
-                # Download new dependencies
                 new_dep_names = {str(dep.filename).strip().lower() for dep in deps_to_install}
                 for dep in deps_to_install:
                     modrinth_client.download_to(dep.download_url, mods_dir / dep.filename)
 
-                # Remove old dependencies that are no longer needed
                 removed_deps = old_dep_names - new_dep_names
                 for removed_dep in removed_deps:
                     try:
                         dep_path = self._find_mod_jar_path(mods_dir, removed_dep)
                         if dep_path and dep_path.exists():
-                            # Check if any other mod needs this dependency
+
                             remaining_parents = [
                                 p
                                 for p in dep_state.get("required_by", {}).get(removed_dep, [])
@@ -1250,7 +1226,7 @@ class ModsMixin:
                     if old_path and old_path.exists():
                         old_path.unlink(missing_ok=True)
                     self._remove_mod_from_mod_states(old_name)
-                    # Clean up old dependency relationships and orphaned dependency mods
+
                     self._cleanup_orphaned_dependencies(old_name)
                     self._remove_mod_from_dependency_state(old_name)
 
@@ -1266,7 +1242,6 @@ class ModsMixin:
             except Exception:
                 failed += 1
 
-        # Apply datapack updates.
         dp_updates = datapack_updates or []
         dp_dir = self._datapacks_dir()
         if dp_dir:

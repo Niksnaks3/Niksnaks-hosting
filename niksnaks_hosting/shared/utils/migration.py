@@ -1,12 +1,3 @@
-"""
-One-time migration of data written by the app under its former "Hosty" name.
-
-The rebrand moved the per-user data directory and renamed every on-disk state
-file, which would otherwise leave existing servers, JREs and backups stranded in
-the old location. Everything here is rename/move only -- nothing is deleted, and
-any failure leaves the legacy data untouched so a later run can retry.
-"""
-
 from __future__ import annotations
 
 import json
@@ -15,7 +6,6 @@ import shutil
 import sys
 from pathlib import Path
 
-# Per-server state files, keyed by their legacy name.
 LEGACY_STATE_FILES = {
     ".hosty-mod-installs.json": ".niksnaks-hosting-mod-installs.json",
     ".hosty-modpacks.json": ".niksnaks-hosting-modpacks.json",
@@ -28,16 +18,13 @@ LEGACY_STATE_FILES = {
 LEGACY_BACKUPS_DIR = "hosty-backups"
 BACKUPS_DIR = "niksnaks-hosting-backups"
 
-# Longest prefix first so "hosty-full-backup-" is not matched by "hosty-backup-".
 LEGACY_BACKUP_PREFIXES = (
     ("hosty-auto-backup-", "niksnaks-hosting-auto-backup-"),
     ("hosty-full-backup-", "niksnaks-hosting-full-backup-"),
     ("hosty-backup-", "niksnaks-hosting-backup-"),
 )
 
-
 def legacy_data_dir() -> Path:
-    """Return the data directory this app used before it was renamed."""
     if sys.platform == "win32":
         local_app_data = os.environ.get("LOCALAPPDATA")
         if local_app_data:
@@ -49,9 +36,7 @@ def legacy_data_dir() -> Path:
 
     return Path.home() / ".local" / "share" / "hosty"
 
-
 def migrate_server_dir(root: Path) -> None:
-    """Rename the legacy state files and backups inside a single server directory."""
     root = Path(root)
     if not root.is_dir():
         return
@@ -87,9 +72,7 @@ def migrate_server_dir(root: Path) -> None:
                             pass
                     break
 
-
 def _move_contents(source: Path, target: Path) -> None:
-    """Move every entry of ``source`` into ``target``, skipping name clashes."""
     target.mkdir(parents=True, exist_ok=True)
     for entry in list(source.iterdir()):
         destination = target / entry.name
@@ -100,9 +83,7 @@ def _move_contents(source: Path, target: Path) -> None:
         except (OSError, shutil.Error):
             pass
 
-
 def _rewrite_path(value: str, legacy_root: Path, new_root: Path) -> str:
-    """Repoint an absolute path that still lives under the legacy data directory."""
     if not value:
         return value
     try:
@@ -117,9 +98,7 @@ def _rewrite_path(value: str, legacy_root: Path, new_root: Path) -> str:
 
     return str(new_root / relative)
 
-
 def _migrate_config(legacy_config: Path, new_config: Path, legacy_root: Path, new_root: Path) -> None:
-    """Copy servers.json across, repointing the absolute paths it stores."""
     try:
         data = json.loads(legacy_config.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -146,14 +125,7 @@ def _migrate_config(legacy_config: Path, new_config: Path, legacy_root: Path, ne
     except OSError:
         pass
 
-
 def migrate_legacy_data(data_dir: Path) -> bool:
-    """
-    Move data left behind by the "Hosty" name into ``data_dir``.
-
-    Returns True when a migration ran. Does nothing once ``data_dir`` has its own
-    servers.json, so this is safe to call on every start.
-    """
     new_root = Path(data_dir)
     legacy_root = legacy_data_dir()
 
@@ -173,8 +145,6 @@ def migrate_legacy_data(data_dir: Path) -> bool:
 
     _migrate_config(legacy_config, new_config, legacy_root, new_root)
 
-    # Servers created with a custom location live outside the data directory, so
-    # take the roots from the config as well as the default servers folder.
     roots: list[Path] = []
     servers_dir = new_root / "servers"
     if servers_dir.is_dir():
@@ -190,9 +160,7 @@ def migrate_legacy_data(data_dir: Path) -> bool:
 
     return True
 
-
 def _configured_server_dirs(config_path: Path) -> list[Path]:
-    """Return the server directories listed in a servers.json file."""
     try:
         data = json.loads(config_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):

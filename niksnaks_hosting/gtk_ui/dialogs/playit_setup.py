@@ -1,7 +1,3 @@
-"""
-Playit setup dialog.
-"""
-
 from __future__ import annotations
 
 import subprocess
@@ -19,7 +15,6 @@ from gi.repository import Adw, GLib, GObject, Gtk
 from niksnaks_hosting.shared.backend.playit_config import load_playit_config, save_playit_config
 from niksnaks_hosting.shared.backend.server_manager import ServerInfo, ServerManager
 from niksnaks_hosting.shared.utils.subprocess_utils import hidden_subprocess_kwargs
-
 
 def _open_uri(uri: str) -> bool:
     try:
@@ -41,10 +36,7 @@ def _open_uri(uri: str) -> bool:
     except Exception:
         return False
 
-
 class PlayitSetupDialog(Adw.Dialog):
-    """Guided setup for playit install + setup-code link flow."""
-
     __gsignals__ = {
         "setup-complete": (GObject.SignalFlags.RUN_FIRST, None, ()),
     }

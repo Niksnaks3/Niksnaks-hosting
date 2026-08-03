@@ -1,7 +1,3 @@
-"""
-FilesView -- folders, worlds, backups, and Modrinth integration (per selected server).
-"""
-
 from __future__ import annotations
 
 import shutil
@@ -23,10 +19,7 @@ from niksnaks_hosting.shared.backend.server_manager import ServerInfo, ServerMan
 from .mixins import BackupsMixin, ModrinthMixin, ModsMixin, PlayersMixin, WorldsMixin
 from .utils import *
 
-
 class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, WorldsMixin):
-    """Browse files for the currently selected server only."""
-
     def __init__(self):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.set_hexpand(True)
@@ -130,13 +123,11 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, W
         self._mods_group.add(check_updates_row)
         self._check_updates_row = check_updates_row
 
-        # "Installed Mods" collapsible section (modpacks + standalone mods)
         mods_expander = Adw.ExpanderRow(title=_("Installed Mods"))
         mods_expander.set_expanded(False)
         self._mods_expander = mods_expander
         self._mods_group.add(mods_expander)
 
-        # "Installed Datapacks" collapsible section
         datapacks_expander = Adw.ExpanderRow(title=_("Installed Datapacks"))
         datapacks_expander.set_expanded(False)
         self._datapacks_expander = datapacks_expander
@@ -164,7 +155,6 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, W
         self._rebuild_lists()
 
     def refresh_worlds_if_changed(self, force: bool = False) -> None:
-        """Refresh the Files lists when world or dimension folders changed on disk."""
         if not self._server_info:
             return
 
@@ -217,7 +207,6 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, W
 
         self._clear_group_rows(self._worlds_group, self._world_rows)
 
-        # Clear installed mods expander
         if self._mods_expander:
             for row in list(self._mod_rows):
                 try:
@@ -226,7 +215,6 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, W
                     pass
         self._mod_rows.clear()
 
-        # Clear installed datapacks expander
         if self._datapacks_expander:
             for row in list(self._datapack_rows):
                 try:
@@ -268,7 +256,6 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, W
                 self._worlds_group.add(row)
                 self._world_rows.append(row)
 
-        # ---- Installed Mods expander ----
         mods_dir = root / "mods"
         mods_dir.mkdir(parents=True, exist_ok=True)
         jars = sorted(mods_dir.glob("*.jar"), key=lambda p: p.name.lower())
@@ -295,11 +282,9 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, W
                 info = self._add_info_row_to_expander(self._mods_expander, _("No mods installed"))
                 self._mod_rows.append(info)
 
-            # Update expander subtitle with count
             total_mods = len(entries) + len([j for j in jars if j.name.lower() not in managed_set])
             self._mods_expander.set_subtitle(_("{} item(s)").format(total_mods) if total_mods else _("None installed"))
 
-        # ---- Installed Datapacks expander ----
         if self._datapacks_expander:
             dp_state = self._read_datapack_state().get("datapacks", {})
             dp_dir = self._datapacks_dir()
@@ -312,7 +297,6 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, W
                 self._datapacks_expander.add_row(row)
                 self._datapack_rows.append(row)
 
-            # Also scan datapacks dir for untracked zip files
             tracked_filenames = {str(m.get("filename", "")).strip().lower() for m in dp_state.values()}
             if dp_dir and dp_dir.is_dir():
                 for dp_file in sorted(dp_dir.glob("*.zip"), key=lambda p: p.name.lower()):
@@ -339,7 +323,6 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, W
                 info = self._add_info_row_to_expander(self._datapacks_expander, _("No datapacks installed"))
                 self._datapack_rows.append(info)
 
-            # Count real items (tracked + untracked files)
             untracked_count = 0
             if dp_dir and dp_dir.is_dir():
                 for dp_file in dp_dir.glob("*.zip"):
@@ -350,7 +333,6 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, W
                 _("{} item(s)").format(real_count) if real_count else _("None installed")
             )
 
-        # ---- Disabled by Version Updates expander ----
         if self._disabled_expander and self._server_manager and self._server_info:
             disabled = self._server_manager.get_incompatible_components(self._server_info.id)
             disabled_items: list[dict[str, str]] = []

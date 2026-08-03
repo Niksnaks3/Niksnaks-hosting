@@ -1,7 +1,3 @@
-"""
-Per-server playit configuration helpers.
-"""
-
 from __future__ import annotations
 
 import json
@@ -20,11 +16,9 @@ DEFAULT_PLAYIT_CONFIG = {
     "voicechat_port": 24454,
 }
 
-
 def playit_config_path(server_dir: str | Path) -> Path:
     root = Path(server_dir)
     return root / ".niksnaks-hosting-playit.json"
-
 
 def load_playit_config(server_dir: str | Path) -> dict:
     path = playit_config_path(server_dir)
@@ -59,7 +53,6 @@ def load_playit_config(server_dir: str | Path) -> dict:
     except Exception:
         cfg["voicechat_port"] = 24454
     return cfg
-
 
 def save_playit_config(server_dir: str | Path, config: dict) -> bool:
     path = playit_config_path(server_dir)

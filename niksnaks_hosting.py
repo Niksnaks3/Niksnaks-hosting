@@ -1,16 +1,9 @@
 #!/usr/bin/env python3
-"""
-Niksnaks-Hosting - Fabric Minecraft Server Manager
-A modern libadwaita application for creating, running,
-and managing Fabric Minecraft servers.
-"""
-
 import os
 import sys
 from pathlib import Path
 
 from niksnaks_hosting.factory import create_application
-
 
 def _prepend_env_path(name: str, value: Path) -> None:
     value_text = str(value)
@@ -20,9 +13,7 @@ def _prepend_env_path(name: str, value: Path) -> None:
     else:
         os.environ[name] = value_text
 
-
 def _configure_frozen_gtk_environment() -> None:
-    """Point GTK/PyGObject at bundled runtime files in PyInstaller builds."""
     if not getattr(sys, "frozen", False):
         return
 
@@ -66,7 +57,6 @@ def _configure_frozen_gtk_environment() -> None:
     if loaders_cache.exists():
         os.environ.setdefault("GDK_PIXBUF_MODULE_FILE", str(loaders_cache))
 
-
 def _configure_windows_app_identity() -> None:
     if sys.platform != "win32":
         return
@@ -84,7 +74,6 @@ def _configure_windows_app_identity() -> None:
         signal_show()
         sys.exit(0)
 
-
 def _format_missing_gtk_message() -> str:
     if sys.platform == "win32":
         return (
@@ -98,9 +87,7 @@ def _format_missing_gtk_message() -> str:
         "Install GTK4/libadwaita and PyGObject for your system, then try again."
     )
 
-
 def main():
-    """Launch the Niksnaks-Hosting application."""
     try:
         _configure_windows_app_identity()
         _configure_frozen_gtk_environment()
@@ -120,7 +107,6 @@ def main():
     except Exception as exc:
         print(f"Niksnaks-Hosting startup error: {exc}", file=sys.stderr)
         return 1
-
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -12,25 +12,25 @@
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-blue">
 </p>
 
-Niksnaks-Hosting is a desktop app for creating, running, and managing Minecraft Fabric servers with a clean, native-style UI.
+Niksnaks-Hosting is a desktop app for creating, running, and managing Minecraft Fabric servers. It wraps the full life of a server — from first install to daily operation — behind a clean native UI built with GTK4 and libadwaita, so you rarely need to touch a terminal.
 
-It keeps the full server workflow in one app: setup, start/stop, monitoring, mod management, backups, and player access controls.
+## What it does
 
-## Why Niksnaks-Hosting?
+- **Set up a server in a few clicks.** Create a new Fabric server and let Niksnaks-Hosting download the loader, the Minecraft version files, and the matching Java runtime when your system is missing one.
+- **Run and control.** Start and stop servers, send commands, and follow the live console log without leaving the app.
+- **Watch performance.** A live performance view shows CPU and memory usage so you can tell when a server is struggling.
+- **Edit server properties.** A graphical editor for `server.properties` with autosave, including an offline-mode toggle, Java version selection, and custom JVM arguments.
+- **Manage worlds and files.** Browse the server folder, import and switch worlds, and clean up dimensions.
+- **Install mods from Modrinth.** Browse Modrinth inside the app, install mods, and let Niksnaks-Hosting pull in their dependencies automatically.
+- **Back up and restore.** Create world backups and restore them when something breaks; old backups are removed automatically after 30 days.
+- **Let friends connect.** Built-in Playit support lets you host without manual port forwarding, plus whitelist and ban-list management.
+- **Run more than one server.** Multiple servers can run at the same time from the same window.
 
-
-- Easy to use: set up and run a Fabric server without juggling scripts, terminals, or scattered tools.
-- Auto-downloads dependencies: Niksnaks-Hosting fetches what your server needs, including Java when it is missing.
-- All in the app: setup, start/stop, live monitoring, mod management, backups, and access controls in one place.
-- Built for real hosting: stream logs, send commands, tweak settings, and manage worlds without leaving Niksnaks-Hosting.
-- Less manual maintenance: practical backup and restore tools help you recover quickly when something goes wrong.
-
-
-## Run Niksnaks-Hosting
+## Get Niksnaks-Hosting
 [![Download on Flathub](https://flathub.org/api/badge?svg&locale=en)](https://flathub.org/en/apps/com.niksnakshosting.NiksnaksHosting)
 
-- Linux: use the Flatpak release from [Flathub](https://flathub.org/en/apps/com.niksnakshosting.NiksnaksHosting).
-- Windows: Download the Windows installer.
+- **Linux:** install the Flatpak from [Flathub](https://flathub.org/en/apps/com.niksnakshosting.NiksnaksHosting).
+- **Windows:** download the Windows installer from the releases.
 
 <details>
 <summary>Run from source (Python)</summary>
@@ -38,7 +38,7 @@ It keeps the full server workflow in one app: setup, start/stop, monitoring, mod
 ### Linux
 
 1. Install GTK4/libadwaita and PyGObject system packages.
-2. Install Python dependencies:
+2. Install the Python dependencies:
 
 ```bash
 python3 -m pip install requests psutil Pillow
@@ -119,11 +119,6 @@ flatpak install --user ./dist/Niksnaks-Hosting-<version>.flatpak
 ```
 
 </details>
-
-## Demo
-
-
-
 
 ## Screenshots
 

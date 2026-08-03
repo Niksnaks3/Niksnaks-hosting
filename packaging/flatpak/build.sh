@@ -1,12 +1,4 @@
 #!/usr/bin/env bash
-# Build the single-file Linux installer: dist/Niksnaks-Hosting-<version>.flatpak
-#
-# Must run on Linux (or WSL) with flatpak and flatpak-builder installed:
-#   Debian/Ubuntu: sudo apt install flatpak flatpak-builder
-#   Fedora:        sudo dnf install flatpak flatpak-builder
-#
-# Install the result with:
-#   flatpak install --user ./dist/Niksnaks-Hosting-<version>.flatpak
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

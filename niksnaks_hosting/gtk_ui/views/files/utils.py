@@ -1,7 +1,3 @@
-"""
-FilesView -- folders, worlds, backups, and Modrinth integration (per selected server).
-"""
-
 from __future__ import annotations
 
 import os
@@ -35,7 +31,6 @@ __all__ = [
     "_world_seed",
 ]
 
-
 def _open_uri(uri: str) -> bool:
     try:
         Gio.AppInfo.launch_default_for_uri(uri, None)
@@ -62,7 +57,6 @@ def _open_uri(uri: str) -> bool:
     except Exception:
         return False
 
-
 def _open_path(path: Path) -> bool:
     p = path.resolve()
     target = p.parent if p.is_file() else p
@@ -75,7 +69,6 @@ def _open_path(path: Path) -> bool:
             pass
 
     return _open_uri(target.as_uri())
-
 
 def _world_dirs(server_root: Path) -> list[Path]:
     def _configured_level_name(root: Path) -> str:
@@ -138,11 +131,9 @@ def _world_dirs(server_root: Path) -> list[Path]:
         return out
     return [sorted(out, key=lambda p: p.name.lower())[0]]
 
-
 def _world_dimension_dirs(world_dir: Path) -> list[tuple[str, Path]]:
     dims: list[tuple[str, Path]] = []
 
-    # Main world root typically contains overworld data.
     if (world_dir / "region").is_dir() or (world_dir / "entities").is_dir():
         dims.append(("Overworld", world_dir))
 
@@ -163,7 +154,6 @@ def _world_dimension_dirs(world_dir: Path) -> list[tuple[str, Path]]:
                 label = dim_name if ns == "minecraft" else f"{ns}:{dim_dir.name}"
                 dims.append((label, dim_dir))
 
-    # Keep insertion order while de-duplicating by path.
     seen: set[Path] = set()
     unique: list[tuple[str, Path]] = []
     for label, path in dims:
@@ -175,17 +165,12 @@ def _world_dimension_dirs(world_dir: Path) -> list[tuple[str, Path]]:
 
     return unique
 
-
-# _world_seed is imported from niksnaks_hosting.shared.utils.nbt_utils
-
-
 def _is_relative_to(path: Path, parent: Path) -> bool:
     try:
         path.relative_to(parent)
         return True
     except ValueError:
         return False
-
 
 def _format_size(size: int) -> str:
     units = ["B", "KB", "MB", "GB"]
@@ -198,10 +183,8 @@ def _format_size(size: int) -> str:
         val /= 1024.0
     return f"{int(size)} B"
 
-
 def _format_mtime(ts: float) -> str:
     return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
-
 
 def _format_compact_count(n: int) -> str:
     if n >= 1_000_000:
@@ -209,7 +192,6 @@ def _format_compact_count(n: int) -> str:
     if n >= 1_000:
         return f"{n / 1_000:.1f}K"
     return str(n)
-
 
 def _is_descendant_of(widget: Gtk.Widget, ancestor: Gtk.Widget) -> bool:
     current = widget

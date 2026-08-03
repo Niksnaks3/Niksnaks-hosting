@@ -1,8 +1,3 @@
-"""
-PropertiesView - GUI editor for server.properties.
-Uses Adw.PreferencesPage with typed rows.
-"""
-
 import threading
 
 import gi
@@ -28,10 +23,7 @@ from niksnaks_hosting.shared.utils.constants import (
 DIFFICULTY_MODES = [*DIFFICULTIES, "hardcore"]
 COMMON_JAVA_VERSIONS = [8, 11, 16, 17, 21, 25]
 
-
 class PropertiesView(Gtk.Box):
-    """GUI editor for server.properties using Adwaita preference widgets."""
-
     def __init__(self, toast_overlay=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.set_hexpand(True)
@@ -44,7 +36,6 @@ class PropertiesView(Gtk.Box):
         self._suppress_changes = False
         self._app_toast_overlay = toast_overlay
 
-        # Restart banner
         self._banner = Adw.Banner()
         self._banner.set_title(_("Restart the server to apply changes"))
         self._banner.set_button_label(_("Dismiss"))
@@ -59,7 +50,6 @@ class PropertiesView(Gtk.Box):
 
         page = Adw.PreferencesPage()
 
-        # ===== General Group =====
         general = Adw.PreferencesGroup(title=_("General"))
 
         self._autostart_row = Adw.SwitchRow(
@@ -95,7 +85,6 @@ class PropertiesView(Gtk.Box):
 
         page.add(general)
 
-        # ===== Resources (Niksnaks-Hosting - not in server.properties) =====
         resources = Adw.PreferencesGroup(title=_("Resources"))
         ram_adj = Gtk.Adjustment(
             value=DEFAULT_RAM_MB,
@@ -112,7 +101,6 @@ class PropertiesView(Gtk.Box):
         resources.add(self._ram_row)
         page.add(resources)
 
-        # ===== Java Runtime Group =====
         java_group = Adw.PreferencesGroup(title=_("Java Runtime"))
 
         java_labels = [f"Java {v}" for v in COMMON_JAVA_VERSIONS]
@@ -131,10 +119,8 @@ class PropertiesView(Gtk.Box):
 
         page.add(java_group)
 
-        # ===== World Group =====
         world = Adw.PreferencesGroup(title=_("World"))
 
-        # level-type is now read-only in the World Manager
         self._widgets["view-distance"] = self._add_spin_row(world, _("View Distance"), "view-distance", 2, 32, 10)
         self._widgets["simulation-distance"] = self._add_spin_row(
             world, _("Simulation Distance"), "simulation-distance", 2, 32, 10
@@ -148,14 +134,12 @@ class PropertiesView(Gtk.Box):
 
         page.add(world)
 
-        # ===== Network Group =====
         network = Adw.PreferencesGroup(title=_("Network"))
 
         self._widgets["enable-query"] = self._add_switch_row(network, _("Enable Query"), "enable-query", False, "")
 
         page.add(network)
 
-        # ===== Players Group =====
         players = Adw.PreferencesGroup(title=_("Players"))
 
         self._widgets["pvp"] = self._add_switch_row(players, _("PvP"), "pvp", True, "")
@@ -166,7 +150,6 @@ class PropertiesView(Gtk.Box):
 
         page.add(players)
 
-        # ===== Advanced Group =====
         advanced = Adw.PreferencesGroup(title=_("Advanced"))
 
         self._widgets["enable-command-block"] = self._add_switch_row(
@@ -184,7 +167,6 @@ class PropertiesView(Gtk.Box):
         self._connect_auto_save_signals()
 
     def _on_java_version_changed(self, *_args) -> None:
-        """Save Java version selection to server info."""
         if self._suppress_changes or not self._server_manager or not self._server_info:
             return
         idx = self._java_version_row.get_selected()
@@ -202,7 +184,6 @@ class PropertiesView(Gtk.Box):
             self._banner.set_revealed(True)
 
     def _on_jvm_args_applied(self, *_args) -> None:
-        """Save JVM arguments to server info when apply button is pressed."""
         self._save_jvm_args()
 
     def _save_jvm_args(self) -> None:
@@ -244,21 +225,18 @@ class PropertiesView(Gtk.Box):
         success, err = self._server_manager.set_server_autostart(self._server_info.id, active)
 
         if not success:
-            # Revert the toggle and show error
+
             self._suppress_changes = True
             row.set_active(not active)
             self._suppress_changes = False
 
-            # Show toast/banner
             self._banner.set_title(err)
             self._banner.set_revealed(True)
 
     def _on_entry_apply(self, row, title):
-        """Handle entry row apply/confirmation."""
         self._show_toast(_("Property updated"))
 
     def _show_toast(self, message: str, timeout: int = 2):
-        """Show a toast notification."""
         if not self._app_toast_overlay:
             return
         toast = Adw.Toast(title=message)
@@ -266,7 +244,6 @@ class PropertiesView(Gtk.Box):
         self._app_toast_overlay.add_toast(toast)
 
     def _add_entry_row(self, group, title, key, default):
-        """Add an Adw.EntryRow to a group."""
         row = Adw.EntryRow(title=title)
         row.set_show_apply_button(True)
         row.set_text(default)
@@ -276,7 +253,6 @@ class PropertiesView(Gtk.Box):
         return row
 
     def _add_spin_row(self, group, title, key, min_val, max_val, default):
-        """Add an Adw.SpinRow to a group."""
         adj = Gtk.Adjustment(value=default, lower=min_val, upper=max_val, step_increment=1, page_increment=10)
         row = Adw.SpinRow(title=title, adjustment=adj)
         row._prop_key = key
@@ -284,7 +260,6 @@ class PropertiesView(Gtk.Box):
         return row
 
     def _add_switch_row(self, group, title, key, default, subtitle=""):
-        """Add an Adw.SwitchRow to a group."""
         row = Adw.SwitchRow(title=title)
         if subtitle:
             row.set_subtitle(subtitle)
@@ -294,13 +269,11 @@ class PropertiesView(Gtk.Box):
         return row
 
     def _add_combo_row(self, group, title, key, options, default):
-        """Add an Adw.ComboRow to a group."""
         string_list = Gtk.StringList.new(options)
         row = Adw.ComboRow(title=title, model=string_list)
         row._prop_key = key
         row._options = options
 
-        # Set default selection
         try:
             idx = options.index(default)
             row.set_selected(idx)
@@ -316,7 +289,7 @@ class PropertiesView(Gtk.Box):
         server_manager: ServerManager | None = None,
         server_info: ServerInfo | None = None,
     ):
-        """Load a server's config into the view."""
+
         self._config = config
         self._server_manager = server_manager
         self._server_info = server_info
@@ -467,20 +440,17 @@ class PropertiesView(Gtk.Box):
             return mc_values[idx]
 
         def resolve_forge_build_async(mc_version: str) -> None:
-            """Resolve the recommended Forge build for an MC version (async, debounced)."""
             if not mc_version:
                 return
-            # Skip if we already hold a build for this MC, or one is in flight.
+
             if resolved_forge_mc["value"] == mc_version and (loader_values or forge_inflight["value"]):
                 return
-            # Supersede any in-flight resolve for a different MC: a slow earlier
-            # worker is rejected via the generation token below.
+
             forge_resolve_gen["value"] += 1
             gen = forge_resolve_gen["value"]
             forge_inflight["value"] = True
             resolved_forge_mc["value"] = mc_version
-            # Clear synchronously so a stale build for a previous MC can never be
-            # advanced to the update step while the new build is still resolving.
+
             loader_values.clear()
             selected_loader["value"] = ""
             loader_version_row.set_subtitle(_("Loading..."))
@@ -491,7 +461,7 @@ class PropertiesView(Gtk.Box):
 
                 def done():
                     if gen != forge_resolve_gen["value"]:
-                        return False  # superseded by a newer resolve
+                        return False
                     forge_inflight["value"] = False
                     if build:
                         loader_values.append(build)
@@ -514,8 +484,7 @@ class PropertiesView(Gtk.Box):
                     primary_btn.set_sensitive(False)
                     return
                 resolve_forge_build_async(mc)
-                # resolve_forge_build_async clears loader_values and disables the
-                # button until the build resolves; do not re-enable it here.
+
                 return
             primary_btn.set_sensitive(bool(mc_values) and bool(loader_values))
 
@@ -575,7 +544,7 @@ class PropertiesView(Gtk.Box):
                 if mc_values:
                     mc_row.set_selected(0)
                 if is_forge:
-                    # The Forge build is resolved per selected MC via validate().
+
                     loader_values.clear()
                     loader_version_row.set_subtitle(
                         _("Select a Minecraft version") if not mc_values else _("Loading...")
@@ -586,7 +555,7 @@ class PropertiesView(Gtk.Box):
                     ]
                     loader_values.clear()
                     loader_values.extend(next_loaders)
-                    # Automatically use the newest loader (first in list)
+
                     if loader_values:
                         selected_loader["value"] = loader_values[0]
                         loader_version_row.set_subtitle(loader_values[0])
@@ -601,7 +570,7 @@ class PropertiesView(Gtk.Box):
             selected_mc["value"] = selected_mc_version()
             if not selected_mc["value"]:
                 return
-            # Use the automatically selected newest loader
+
             selected_loader["value"] = loader_values[0]
             primary_btn.set_sensitive(False)
             primary_btn.set_label(_("Update"))
@@ -727,14 +696,12 @@ class PropertiesView(Gtk.Box):
         dialog.present(self.get_root())
 
     def reload_from_disk(self):
-        """Reload properties from server.properties on disk."""
         if not self._config:
             return
         self._config.load()
         self._populate()
 
     def _populate_java_settings(self):
-        """Populate Java version and JVM args from server info."""
         if not self._server_info:
             return
         self._suppress_changes = True
@@ -747,7 +714,6 @@ class PropertiesView(Gtk.Box):
         self._suppress_changes = False
 
     def _populate(self):
-        """Populate widgets from config."""
         if not self._config:
             return
 
@@ -774,7 +740,7 @@ class PropertiesView(Gtk.Box):
             elif isinstance(widget, Adw.ComboRow):
                 options = widget._options
                 if key == "difficulty":
-                    # Hardcore mode is represented as a virtual difficulty option in the UI.
+
                     val = "hardcore" if self._config.get_bool("hardcore", False) else self._config.get("difficulty", "")
                     try:
                         idx = options.index(val)
@@ -831,7 +797,6 @@ class PropertiesView(Gtk.Box):
         dialog.present(self.get_root())
 
     def _save_properties(self):
-        """Save properties to file."""
         if not self._config:
             return
 
@@ -876,5 +841,4 @@ class PropertiesView(Gtk.Box):
         self._banner.set_revealed(running)
 
     def focus_save_button(self):
-        """Compatibility no-op after removing explicit save button."""
         return

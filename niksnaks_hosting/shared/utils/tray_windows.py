@@ -1,11 +1,3 @@
-"""
-WindowsTrayManager - Direct Win32 system tray icon via ctypes.
-
-No external dependencies beyond Python's built-in ctypes.
-Creates a hidden message window on a daemon thread and uses
-Shell_NotifyIconW to manage the notification area icon.
-"""
-
 from __future__ import annotations
 
 import ctypes
@@ -22,7 +14,6 @@ kernel32 = ctypes.windll.kernel32
 user32 = ctypes.windll.user32
 shell32 = ctypes.windll.shell32
 
-# Some ctypes.wintypes handle types may not exist in all Python versions
 HANDLE = ctypes.c_void_p
 try:
     HICON = ctypes.wintypes.HICON
@@ -41,7 +32,6 @@ try:
 except AttributeError:
     HINSTANCE = HANDLE
 
-# Windows constants
 WM_DESTROY = 0x0002
 WM_CLOSE = 0x0010
 WM_COMMAND = 0x0111
@@ -86,7 +76,6 @@ MF_STRING = 0x00000000
 ID_SHOW = 1001
 ID_QUIT = 1002
 
-
 class NOTIFYICONDATAW(ctypes.Structure):
     _fields_ = [
         ("cbSize", ctypes.wintypes.DWORD),
@@ -106,12 +95,9 @@ class NOTIFYICONDATAW(ctypes.Structure):
         ("hBalloonIcon", HICON),
     ]
 
-
 class POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
-
-# WPARAM and LPARAM are pointer-sized on 64-bit Windows
 WPARAM = ctypes.c_uint if ctypes.sizeof(ctypes.c_void_p) <= 4 else ctypes.c_ulonglong
 LPARAM = ctypes.c_long if ctypes.sizeof(ctypes.c_void_p) <= 4 else ctypes.c_longlong
 
@@ -123,10 +109,6 @@ WNDPROC = ctypes.WINFUNCTYPE(
     LPARAM,
 )
 
-# ctypes defaults every undeclared function to a 32-bit int return value, which
-# silently truncates the 64-bit handles and pointers the Win32 API hands back.
-# A truncated HINSTANCE or HBRUSH makes RegisterClassExW read garbage and fault,
-# so every function used here declares its real signature.
 user32.DefWindowProcW.argtypes = [
     ctypes.wintypes.HWND,
     ctypes.wintypes.UINT,
@@ -205,7 +187,6 @@ user32.GetCursorPos.restype = ctypes.wintypes.BOOL
 user32.PostMessageW.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.UINT, WPARAM, LPARAM]
 user32.PostMessageW.restype = ctypes.wintypes.BOOL
 
-# GetMessageW returns -1 on error, so the result must stay signed.
 user32.GetMessageW.argtypes = [ctypes.c_void_p, ctypes.wintypes.HWND, ctypes.wintypes.UINT, ctypes.wintypes.UINT]
 user32.GetMessageW.restype = ctypes.c_int
 
@@ -221,10 +202,7 @@ user32.PostQuitMessage.restype = None
 shell32.Shell_NotifyIconW.argtypes = [ctypes.wintypes.DWORD, ctypes.c_void_p]
 shell32.Shell_NotifyIconW.restype = ctypes.wintypes.BOOL
 
-
 class WindowsTrayManager:
-    """Manages the Windows notification area icon using raw Win32 API."""
-
     def __init__(self, app):
         self.app = app
         self._thread: threading.Thread | None = None
@@ -237,7 +215,6 @@ class WindowsTrayManager:
         self._wndproc = None
 
     def start(self) -> None:
-        """Create and display the tray icon in a background thread."""
         if self._running.is_set():
             return
         self._running.set()
@@ -245,7 +222,6 @@ class WindowsTrayManager:
         self._thread.start()
 
     def stop(self) -> None:
-        """Stop and remove the tray icon."""
         self._running.clear()
         if self._hwnd:
             user32.PostMessageW(self._hwnd, WM_CLOSE, 0, 0)
@@ -257,17 +233,14 @@ class WindowsTrayManager:
         self._wndproc = None
 
     def set_status(self, message: str) -> None:
-        """Update the tooltip of the tray icon."""
         self._status_message = f"Niksnaks-Hosting \u2014 {message}" if message else "Niksnaks-Hosting"
         self._update_tooltip()
 
     def _update_tooltip(self) -> None:
-        """Push the current tooltip to the tray icon (thread-safe via PostMessage)."""
         if self._hwnd:
             user32.PostMessageW(self._hwnd, WM_APP + 1, 0, 0)
 
     def _thread_main(self) -> None:
-        """Thread entry: register window class, create window, add icon, run loop."""
         module = kernel32.GetModuleHandleW(None)
         class_name = f"NiksnaksHostingTray_{threading.get_native_id()}"
 
@@ -337,7 +310,6 @@ class WindowsTrayManager:
         self._remove_icon()
 
     def _wnd_proc(self, hwnd: int, msg: int, wparam: int, lparam: int) -> int:
-        """Window procedure for the hidden tray message window."""
         if msg == WM_COMMAND:
             cmd_id = wparam & 0xFFFF
             if cmd_id == ID_SHOW:
@@ -362,7 +334,6 @@ class WindowsTrayManager:
         return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
     def _handle_tray_notify(self, msg: int, lparam: int) -> bool:
-        """Handle notification area callback messages."""
         callback_msg = WM_APP + 100
         if msg != callback_msg:
             return False
@@ -373,14 +344,13 @@ class WindowsTrayManager:
             GLib.idle_add(self._show_popup)
             return True
 
-        if event in (NIN_SELECT, 0x0402):  # left-click or NIN_KEYSELECT
+        if event in (NIN_SELECT, 0x0402):
             GLib.idle_add(self._show_window)
             return True
 
         return False
 
     def _add_icon(self) -> None:
-        """Add the tray icon via Shell_NotifyIconW NIM_ADD."""
         self._icon_handle = self._create_hicon()
 
         nid = NOTIFYICONDATAW()
@@ -394,14 +364,12 @@ class WindowsTrayManager:
 
         shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid))
 
-        # Set version for modern Windows behavior
         nid.uVersion = NOTIFYICON_VERSION_4
         shell32.Shell_NotifyIconW(NIM_SETVERSION, ctypes.byref(nid))
 
         self._nid = nid
 
     def _remove_icon(self) -> None:
-        """Remove the tray icon via Shell_NotifyIconW NIM_DELETE."""
         if self._nid:
             nid = self._nid
             nid.uFlags = 0
@@ -413,7 +381,6 @@ class WindowsTrayManager:
             self._icon_handle = None
 
     def _update_icon_tooltip(self) -> None:
-        """Update the tray icon tooltip on the window thread."""
         if not self._nid:
             return
         nid = self._nid
@@ -422,7 +389,6 @@ class WindowsTrayManager:
         shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(nid))
 
     def _create_hicon(self) -> int:
-        """Create a Windows HICON from the app icon or a fallback."""
         try:
             pil_image = self._build_icon_pil()
             if pil_image:
@@ -435,7 +401,6 @@ class WindowsTrayManager:
         return self._hicon_fallback()
 
     def _build_icon_pil(self) -> object | None:
-        """Try loading the Niksnaks-Hosting SVG icon via GdkPixbuf; fall back to drawing."""
         try:
             gi.require_version("GdkPixbuf", "2.0")
             from gi.repository import GdkPixbuf
@@ -458,7 +423,6 @@ class WindowsTrayManager:
         return self._draw_fallback_pil()
 
     def _draw_fallback_pil(self):
-        """Draw a visible fallback icon: green circle with white 'H'."""
         from PIL import Image, ImageDraw
 
         size = 64
@@ -484,7 +448,6 @@ class WindowsTrayManager:
         return img
 
     def _find_svg_path(self) -> Path | None:
-        """Locate the Niksnaks-Hosting SVG icon from bundled or development paths."""
         if getattr(sys, "frozen", False):
             bundle_dir = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
             candidates = [
@@ -502,7 +465,6 @@ class WindowsTrayManager:
         return None
 
     def _pil_to_hicon(self, img) -> int:
-        """Convert a PIL Image to a Windows HICON via temporary ICO file."""
         import os
         import tempfile
 
@@ -532,11 +494,10 @@ class WindowsTrayManager:
                 pass
 
     def _hicon_fallback(self) -> int:
-        """Fallback HICON using a standard Windows application icon."""
         hicon = user32.LoadImageW(
             None,
             "#32512",
-            IMAGE_ICON,  # IDI_APPLICATION
+            IMAGE_ICON,
             32,
             32,
             LR_DEFAULTSIZE,
@@ -544,7 +505,6 @@ class WindowsTrayManager:
         return hicon or 0
 
     def _show_popup(self) -> None:
-        """Show the tray context menu."""
         if not self._hwnd:
             return
 
@@ -581,11 +541,9 @@ class WindowsTrayManager:
             GLib.idle_add(self._quit_app)
 
     def _show_window(self) -> None:
-        """Show and focus the main window (called on GTK main thread)."""
         if self.app._window:
             self.app._window.set_visible(True)
             self.app._window.present()
 
     def _quit_app(self) -> None:
-        """Quit the application (called on GTK main thread)."""
         self.app.activate_action("quit", None)

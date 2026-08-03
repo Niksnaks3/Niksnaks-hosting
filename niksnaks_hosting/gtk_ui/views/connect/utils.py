@@ -1,7 +1,3 @@
-"""
-ConnectView - Server connection tools (playit.gg tunnel).
-"""
-
 from __future__ import annotations
 
 import subprocess
@@ -19,12 +15,10 @@ from niksnaks_hosting.shared.utils.subprocess_utils import hidden_subprocess_kwa
 
 PLAYIT_DASHBOARD_URL = "https://playit.gg/account/tunnels"
 
-
 __all__ = [
     "_is_descendant_of",
     "_open_uri",
 ]
-
 
 def _is_descendant_of(widget: Gtk.Widget, ancestor: Gtk.Widget) -> bool:
     current = widget
@@ -33,7 +27,6 @@ def _is_descendant_of(widget: Gtk.Widget, ancestor: Gtk.Widget) -> bool:
             return True
         current = current.get_parent()
     return False
-
 
 def _open_uri(uri: str) -> bool:
     try:

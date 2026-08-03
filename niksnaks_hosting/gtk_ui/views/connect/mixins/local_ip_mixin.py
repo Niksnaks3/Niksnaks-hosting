@@ -1,7 +1,3 @@
-"""
-ConnectView - Server connection tools (playit.gg tunnel).
-"""
-
 from __future__ import annotations
 
 import socket
@@ -15,9 +11,7 @@ from gi.repository import Adw, Gdk, Gtk
 
 PLAYIT_DASHBOARD_URL = "https://playit.gg/account/tunnels"
 
-
 from ..utils import *
-
 
 class LocalIpMixin:
     def _make_local_network_group(self) -> Adw.PreferencesGroup:

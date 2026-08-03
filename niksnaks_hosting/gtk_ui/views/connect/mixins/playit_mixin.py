@@ -1,7 +1,3 @@
-"""
-ConnectView - Server connection tools (playit.gg tunnel).
-"""
-
 from __future__ import annotations
 
 import json
@@ -22,13 +18,10 @@ from niksnaks_hosting.shared.utils.constants import LOADER_FABRIC, get_loader_di
 
 PLAYIT_DASHBOARD_URL = "https://playit.gg/account/tunnels"
 
-
 from ..utils import *
-
 
 class PlayitMixin:
     def _server_loader(self) -> str:
-        """The selected server's mod loader id (Fabric/Forge), defaulting to Fabric."""
         if self._server_info:
             return normalize_loader(self._server_info.loader_type)
         return LOADER_FABRIC
@@ -47,7 +40,6 @@ class PlayitMixin:
                 self._cfg["secret"] = claimed_secret
                 cfg_changed = True
 
-            # If playit is already claimed globally, auto-heal per-server flags.
             if claimed_secret and not bool(self._cfg.get("enabled", False)):
                 self._cfg["enabled"] = True
                 cfg_changed = True
@@ -70,8 +62,6 @@ class PlayitMixin:
         if updates:
             self._cfg.update(updates)
 
-        # Load existing config from disk so disk-level changes (e.g. port reassignment
-        # from server_detail view) are never overwritten by stale self._cfg values.
         existing = load_playit_config(root)
         existing.update(
             {
@@ -83,7 +73,7 @@ class PlayitMixin:
                 "java_endpoint": str(self._cfg.get("java_endpoint", "")).strip(),
                 "bedrock_endpoint": str(self._cfg.get("bedrock_endpoint", "")).strip(),
                 "voicechat_endpoint": str(self._cfg.get("voicechat_endpoint", "")).strip(),
-                # Only update port if the caller explicitly passed it
+
                 **({"bedrock_port": updates["bedrock_port"]} if updates and "bedrock_port" in updates else {}),
                 **({"voicechat_port": updates["voicechat_port"]} if updates and "voicechat_port" in updates else {}),
             },
@@ -214,7 +204,7 @@ class PlayitMixin:
             self._voicechat_tunnel_action_btn.remove_css_class("pill")
             self._voicechat_tunnel_action_btn.add_css_class("flat")
             self._voicechat_tunnel_action_btn.set_sensitive(False)
-            # Hide spinners on initial state
+
             self._java_tunnel_spinner.set_visible(False)
             self._java_tunnel_spinner.set_spinning(False)
             self._bedrock_tunnel_spinner.set_visible(False)
@@ -261,7 +251,7 @@ class PlayitMixin:
 
         bedrock_endpoint = str(self._cfg.get("bedrock_endpoint", "")).strip()
         if bedrock_endpoint:
-            # Format bedrock endpoint with middle dot separator and Port label (domain:port -> domain · Port port)
+
             if ":" in bedrock_endpoint:
                 domain, port = bedrock_endpoint.rsplit(":", 1)
                 formatted_endpoint = f"{domain} · Port {port}"
@@ -290,7 +280,6 @@ class PlayitMixin:
             self._java_tunnel_action_btn.remove_css_class("flat")
             self._java_tunnel_action_btn.add_css_class("flat")
 
-        # Show spinner when in progress, button otherwise
         if self._java_tunnel_in_progress:
             self._java_tunnel_action_btn.set_visible(False)
             self._java_tunnel_spinner.set_visible(True)
@@ -313,7 +302,6 @@ class PlayitMixin:
             self._bedrock_tunnel_action_btn.remove_css_class("flat")
             self._bedrock_tunnel_action_btn.add_css_class("flat")
 
-        # Show spinner when in progress, button otherwise
         if self._bedrock_in_progress:
             self._bedrock_tunnel_action_btn.set_visible(False)
             self._bedrock_tunnel_spinner.set_visible(True)
@@ -325,7 +313,7 @@ class PlayitMixin:
 
         voicechat_endpoint = str(self._cfg.get("voicechat_endpoint", "")).strip()
         if voicechat_endpoint:
-            # Format voicechat endpoint with middle dot separator and Port label (domain:port -> domain · Port port)
+
             if ":" in voicechat_endpoint:
                 domain, port = voicechat_endpoint.rsplit(":", 1)
                 formatted_endpoint = f"{domain} · Port {port}"
@@ -354,7 +342,6 @@ class PlayitMixin:
             self._voicechat_tunnel_action_btn.remove_css_class("flat")
             self._voicechat_tunnel_action_btn.add_css_class("flat")
 
-        # Show spinner when in progress, button otherwise
         if self._voicechat_in_progress:
             self._voicechat_tunnel_action_btn.set_visible(False)
             self._voicechat_tunnel_spinner.set_visible(True)
@@ -421,7 +408,6 @@ class PlayitMixin:
         if not endpoint:
             return
 
-        # Extract domain only (remove port if present)
         domain_only = endpoint.rsplit(":", 1)[0] if ":" in endpoint else endpoint
 
         try:
@@ -446,7 +432,6 @@ class PlayitMixin:
         if not endpoint:
             return
 
-        # Extract domain only (remove port if present)
         domain_only = endpoint.rsplit(":", 1)[0] if ":" in endpoint else endpoint
 
         try:
@@ -540,7 +525,6 @@ class PlayitMixin:
         dialog.present(self.get_root())
 
     def _on_regenerate_domain(self, *_args):
-        # Backward-compatible handler alias.
         self._on_manage_java_tunnel()
 
     def _on_manage_java_tunnel(self, *_args):
@@ -1045,33 +1029,22 @@ class PlayitMixin:
         self._confirm_delete_tunnel("Voice Chat", confirmed_delete)
 
     def _has_mod_installed(self, server_dir: str, *mod_patterns: str) -> bool:
-        """Check if any of the given mod patterns are installed in the server.
-
-        Args:
-            server_dir: The server directory path
-            *mod_patterns: One or more mod name patterns to search for (case-insensitive, no extension)
-
-        Returns:
-            True if any mod matching the patterns is found, False otherwise
-        """
         mods_dir = Path(server_dir) / "mods"
         if not mods_dir.exists():
             return False
 
-        # Get all jar files in mods directory
         installed_mods = {f.stem.lower() for f in mods_dir.glob("*.jar")}
 
-        # Check if any of the patterns match an installed mod
         for pattern in mod_patterns:
             pattern_lower = pattern.lower()
-            # Normalize pattern: remove hyphens for matching
+
             pattern_normalized = pattern_lower.replace("-", "")
 
             for mod_name in installed_mods:
-                # Check if pattern is in mod name or mod name starts with pattern
+
                 if pattern_lower in mod_name or mod_name.startswith(pattern_lower):
                     return True
-                # Also check normalized version (e.g., "voicechat" matches "voice-chat")
+
                 mod_normalized = mod_name.replace("-", "")
                 if pattern_normalized in mod_normalized or mod_normalized.startswith(pattern_normalized):
                     return True

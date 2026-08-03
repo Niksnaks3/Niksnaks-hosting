@@ -1,7 +1,3 @@
-"""
-AboutDialog - Niksnaks-Hosting about dialog.
-"""
-
 import gi
 
 gi.require_version("Gtk", "4.0")
@@ -10,9 +6,7 @@ from gi.repository import Adw, Gtk
 
 from niksnaks_hosting.shared.utils.constants import APP_ID, APP_NAME, APP_VERSION, APP_WEBSITE
 
-
 def show_about_dialog(parent):
-    """Show the Niksnaks-Hosting about dialog."""
     about = Adw.AboutDialog()
     about.set_application_name(APP_NAME)
     about.set_application_icon(APP_ID)

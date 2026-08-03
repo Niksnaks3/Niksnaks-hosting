@@ -1,15 +1,7 @@
-"""
-ConfigManager - Read/write server.properties files.
-Preserves comments and ordering.
-"""
-
 import re
 from pathlib import Path
 
-
 class ConfigManager:
-    """Manages reading and writing Minecraft server.properties files."""
-
     def __init__(self, server_dir: str | Path):
         self.server_dir = Path(server_dir)
         self.properties_path = self.server_dir / "server.properties"
@@ -18,7 +10,6 @@ class ConfigManager:
         self._loaded = False
 
     def load(self) -> dict[str, str]:
-        """Load server.properties file. Returns properties dict."""
         self._lines = []
         self._properties = {}
 
@@ -42,11 +33,9 @@ class ConfigManager:
         return dict(self._properties)
 
     def save(self):
-        """Save current properties back to server.properties."""
         if not self._loaded:
             self.load()
 
-        # Update existing lines
         used_keys = set()
         new_lines = []
 
@@ -66,7 +55,6 @@ class ConfigManager:
             else:
                 new_lines.append(line)
 
-        # Add any new properties not in the original file
         for key, value in self._properties.items():
             if key not in used_keys:
                 new_lines.append(f"{key}={value}\n")
@@ -76,25 +64,21 @@ class ConfigManager:
             f.writelines(new_lines)
 
     def get(self, key: str, default: str = "") -> str:
-        """Get a property value."""
         if not self._loaded:
             self.load()
         return self._properties.get(key, default)
 
     def get_bool(self, key: str, default: bool = False) -> bool:
-        """Get a boolean property."""
         val = self.get(key, str(default).lower())
         return val.lower() == "true"
 
     def get_int(self, key: str, default: int = 0) -> int:
-        """Get an integer property."""
         try:
             return int(self.get(key, str(default)))
         except ValueError:
             return default
 
     def set_value(self, key: str, value) -> None:
-        """Set a property value."""
         if not self._loaded:
             self.load()
         if isinstance(value, bool):
@@ -103,13 +87,11 @@ class ConfigManager:
             self._properties[key] = str(value)
 
     def get_all(self) -> dict[str, str]:
-        """Get all properties."""
         if not self._loaded:
             self.load()
         return dict(self._properties)
 
     def set_eula(self, accepted: bool = True):
-        """Set the EULA acceptance."""
         eula_path = self.server_dir / "eula.txt"
         with open(eula_path, "w", encoding="utf-8") as f:
             f.write(f"# Accepted by Niksnaks-Hosting\neula={'true' if accepted else 'false'}\n")

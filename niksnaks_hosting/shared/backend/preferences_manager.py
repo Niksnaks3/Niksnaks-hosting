@@ -1,7 +1,3 @@
-"""
-PreferencesManager - Persist and retrieve Niksnaks-Hosting app-level preferences.
-"""
-
 from __future__ import annotations
 
 import json
@@ -23,10 +19,7 @@ DEFAULT_SETTINGS = {
     "language": "system",
 }
 
-
 class PreferencesManager:
-    """Lightweight JSON-backed settings store."""
-
     def __init__(self, settings_path: Path = SETTINGS_FILE):
         self._settings_path = settings_path
         self._settings = dict(DEFAULT_SETTINGS)
@@ -41,7 +34,7 @@ class PreferencesManager:
             if isinstance(data, dict):
                 self._settings.update(data)
         except Exception:
-            # Fall back to defaults on malformed settings.
+
             self._settings = dict(DEFAULT_SETTINGS)
 
     def _save(self) -> None:
