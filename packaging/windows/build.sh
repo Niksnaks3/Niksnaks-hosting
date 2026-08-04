@@ -34,7 +34,7 @@ while read -r lang; do
   [[ -z "$lang" || "$lang" == \#* ]] && continue
   mkdir -p "build/share/locale/$lang/LC_MESSAGES"
   msgfmt "po/$lang.po" -o "build/share/locale/$lang/LC_MESSAGES/niksnaks-hosting.mo"
-done < po/LINGUAS
+done < <(tr -d '\r' < po/LINGUAS)
 
 echo "==> Building app bundle with PyInstaller"
 MSYS_PREFIX="$(cygpath -m "$PREFIX")" python -m PyInstaller packaging/windows/niksnaks-hosting.spec --noconfirm --clean

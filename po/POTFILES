@@ -1,4 +1,5 @@
 niksnaks_hosting/gtk_ui/application.py
+niksnaks_hosting/gtk_ui/loader_version_row.py
 niksnaks_hosting/gtk_ui/window.py
 niksnaks_hosting/gtk_ui/dialogs/about.py
 niksnaks_hosting/gtk_ui/dialogs/create_server.py

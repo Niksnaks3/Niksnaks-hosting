@@ -2,6 +2,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
 from niksnaks_hosting.version import __version__
 
@@ -45,6 +46,9 @@ FABRIC_META_BASE = "https://meta.fabricmc.net/v2/versions"
 FABRIC_GAME_VERSIONS_URL = f"{FABRIC_META_BASE}/game"
 FABRIC_LOADER_VERSIONS_URL = f"{FABRIC_META_BASE}/loader"
 FABRIC_INSTALLER_VERSIONS_URL = f"{FABRIC_META_BASE}/installer"
+
+def get_fabric_loader_versions_url(mc_version: str) -> str:
+    return f"{FABRIC_LOADER_VERSIONS_URL}/{quote(str(mc_version or ''), safe='')}"
 
 FORGE_MAVEN_BASE = "https://maven.minecraftforge.net/net/minecraftforge/forge"
 FORGE_VERSIONS_URL = f"{FORGE_MAVEN_BASE}/maven-metadata.xml"

@@ -1,6 +1,7 @@
 import re
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import requests
@@ -14,6 +15,7 @@ from niksnaks_hosting.shared.utils.constants import (
     FORGE_VERSIONS_URL,
     LOADER_FABRIC,
     LOADER_FORGE,
+    get_fabric_loader_versions_url,
     get_forge_full_version,
     get_forge_installer_url,
     normalize_loader,
@@ -26,6 +28,33 @@ MOJANG_VERSION_MANIFEST = "https://launchermeta.mojang.com/mc/game/version_manif
 
 FORGE_MIN_MC_VERSION = (1, 12, 0)
 
+@dataclass(frozen=True)
+class LoaderVersionOption:
+
+    version: str
+    recommended: bool = False
+    latest: bool = False
+
+    @property
+    def label(self) -> str:
+        if self.recommended:
+            return _("{} (recommended)").format(self.version)
+        if self.latest:
+            return _("{} (latest)").format(self.version)
+        return self.version
+
+def default_loader_option_index(options: list[LoaderVersionOption]) -> int:
+    for idx, option in enumerate(options):
+        if option.recommended:
+            return idx
+    for idx, option in enumerate(options):
+        if option.latest:
+            return idx
+    return 0
+
+def _forge_build_sort_key(build: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", str(build or "")))
+
 class DownloadManager:
     def __init__(self):
         self._game_versions: list[dict] = []
@@ -35,6 +64,7 @@ class DownloadManager:
         self._mojang_manifest: dict | None = None
         self._forge_metadata: dict[str, list[str]] | None = None
         self._forge_promotions: dict[str, str] | None = None
+        self._fabric_loaders_by_game: dict[str, list[tuple[str, bool]]] = {}
 
     def fetch_game_versions(self, include_snapshots: bool = False) -> list[str]:
         try:
@@ -61,6 +91,32 @@ class DownloadManager:
         except Exception as e:
             print(f"Failed to fetch loader versions: {e}")
             return []
+
+    def fetch_fabric_loader_versions(self, mc_version: str) -> list[tuple[str, bool]]:
+
+        mc_version = str(mc_version or "").strip()
+        if not mc_version:
+            return []
+
+        cached = self._fabric_loaders_by_game.get(mc_version)
+        if cached is not None:
+            return list(cached)
+
+        try:
+            resp = requests.get(get_fabric_loader_versions_url(mc_version), timeout=15)
+            resp.raise_for_status()
+            entries = []
+            for entry in resp.json() or []:
+                loader = entry.get("loader") or {}
+                version = str(loader.get("version") or "").strip()
+                if version:
+                    entries.append((version, bool(loader.get("stable"))))
+        except Exception as e:
+            print(f"Failed to fetch Fabric loader versions for MC {mc_version}: {e}")
+            return [(version, False) for version in self.fetch_loader_versions()]
+
+        self._fabric_loaders_by_game[mc_version] = entries
+        return list(entries)
 
     def fetch_installer_info(self) -> tuple[str | None, str | None]:
         try:
@@ -298,13 +354,16 @@ class DownloadManager:
         for full in raw_versions:
             if "-" not in full:
                 continue
-            mc, _, build = full.partition("-")
+            mc, _sep, build = full.partition("-")
             if not mc or not build:
                 continue
             parsed = parse_mc_version(mc)
             if not parsed or parsed < FORGE_MIN_MC_VERSION:
                 continue
             grouped.setdefault(mc, []).append(build)
+
+        for builds in grouped.values():
+            builds.sort(key=_forge_build_sort_key, reverse=True)
 
         self._forge_metadata = grouped
         return grouped
@@ -339,6 +398,44 @@ class DownloadManager:
             return build
         builds = self.fetch_forge_builds(mc_version)
         return builds[0] if builds else None
+
+    def fetch_compatible_loader_versions(self, loader_type: str, mc_version: str) -> list[LoaderVersionOption]:
+
+        mc_version = str(mc_version or "").strip()
+        if not mc_version:
+            return []
+
+        if normalize_loader(loader_type) == LOADER_FORGE:
+            builds = self.fetch_forge_builds(mc_version)
+            if not builds:
+                return []
+            promos = self._fetch_forge_promotions()
+            recommended = promos.get(f"{mc_version}-recommended", "")
+            latest = promos.get(f"{mc_version}-latest", "")
+            return [
+                LoaderVersionOption(build, recommended=build == recommended, latest=build == latest)
+                for build in builds
+            ]
+
+        entries = self.fetch_fabric_loader_versions(mc_version)
+        return [
+            LoaderVersionOption(version, recommended=stable, latest=idx == 0)
+            for idx, (version, stable) in enumerate(entries)
+        ]
+
+    def fetch_compatible_loader_versions_async(
+        self,
+        loader_type: str,
+        mc_version: str,
+        callback: Callable[[list[LoaderVersionOption]], None],
+    ):
+
+        def _fetch():
+            callback(self.fetch_compatible_loader_versions(loader_type, mc_version))
+
+        thread = threading.Thread(target=_fetch, daemon=True)
+        thread.start()
+        return thread
 
     def get_forge_latest_build(self, mc_version: str) -> str | None:
         promos = self._fetch_forge_promotions()
@@ -439,20 +536,19 @@ class DownloadManager:
         except Exception as e:
             return False, _("Installation error: {}").format(e)
 
-    def fetch_versions_for_loader_async(
+    def fetch_game_versions_for_loader(self, loader_type: str) -> list[str]:
+        if normalize_loader(loader_type) == LOADER_FORGE:
+            return self.fetch_forge_game_versions()
+        return self.fetch_game_versions()
+
+    def fetch_game_versions_for_loader_async(
         self,
         loader_type: str,
-        callback: Callable[[list[str], list[str]], None],
+        callback: Callable[[list[str]], None],
     ):
 
         def _fetch():
-            if normalize_loader(loader_type) == LOADER_FORGE:
-                games = self.fetch_forge_game_versions()
-                callback(games, [])
-            else:
-                games = self.fetch_game_versions()
-                loaders = self.fetch_loader_versions()
-                callback(games, loaders)
+            callback(self.fetch_game_versions_for_loader(loader_type))
 
         thread = threading.Thread(target=_fetch, daemon=True)
         thread.start()

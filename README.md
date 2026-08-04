@@ -14,6 +14,8 @@ Built with Python and GTK 4 / libadwaita, it fits naturally into the GNOME deskt
 
 - **One-click server setup** — install server files and the matching Java runtime
   automatically; run multiple servers side by side.
+- **Version picker** — choose a Minecraft version, then pick any Fabric loader or Forge
+  build published for it, with the recommended one selected by default.
 - **Built-in Modrinth browser** — discover and install mods and modpacks straight from
   the app.
 - **Playit tunnel support** — host without manual port forwarding and share your local

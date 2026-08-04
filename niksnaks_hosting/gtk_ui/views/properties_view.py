@@ -6,7 +6,15 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk
 
+from niksnaks_hosting.gtk_ui.loader_version_row import (
+    build_loader_version_row,
+    selected_loader_version,
+    set_loader_version_message,
+    set_loader_versions,
+    set_loader_versions_loading,
+)
 from niksnaks_hosting.shared.backend.config_manager import ConfigManager
+from niksnaks_hosting.shared.backend.download_manager import LoaderVersionOption
 from niksnaks_hosting.shared.backend.server_manager import ServerInfo, ServerManager
 from niksnaks_hosting.shared.utils.constants import (
     DEFAULT_RAM_MB,
@@ -335,6 +343,10 @@ class PropertiesView(Gtk.Box):
             self._show_toast(_("Select a server first"), timeout=3)
             return
 
+        download_manager = self._server_manager.download_manager
+        loader_type = self._server_info.loader_type
+        installed_loader_version = self._server_info.loader_version
+
         dialog = Adw.Dialog()
         dialog.set_title(_("Update Version"))
         dialog.set_content_width(520)
@@ -360,15 +372,11 @@ class PropertiesView(Gtk.Box):
             title=_("Runtime"),
         )
         mc_values: list[str] = []
-        loader_values: list[str] = []
+        loader_options: list[LoaderVersionOption] = []
         mc_row = Adw.ComboRow(title=_("Minecraft version"), model=Gtk.StringList.new([_("Loading...")]))
         runtime_group.add(mc_row)
 
-        loader_version_row = Adw.ActionRow(
-            title=_("Loader version"),
-            subtitle=_("Loading..."),
-        )
-        loader_version_row.set_activatable(False)
+        loader_version_row = build_loader_version_row()
         runtime_group.add(loader_version_row)
 
         java_info_row = Adw.ActionRow(
@@ -405,10 +413,9 @@ class PropertiesView(Gtk.Box):
         selected_mc = {"value": ""}
         selected_loader = {"value": ""}
         compatibility_plan: dict = {}
-        is_forge = bool(self._server_info and self._server_info.loader_type == LOADER_FORGE)
-        resolved_forge_mc = {"value": ""}
-        forge_resolve_gen = {"value": 0}
-        forge_inflight = {"value": False}
+        is_forge = loader_type == LOADER_FORGE
+        loader_fetch_mc = {"value": ""}
+        loader_fetch_gen = {"value": 0}
 
         toolbar.set_content(stack)
         dialog.set_child(toolbar)
@@ -439,54 +446,56 @@ class PropertiesView(Gtk.Box):
                 return ""
             return mc_values[idx]
 
-        def resolve_forge_build_async(mc_version: str) -> None:
+        def keep_upgrade_options(options: list[LoaderVersionOption]) -> list[LoaderVersionOption]:
+
+            if is_forge or not installed_loader_version:
+                return list(options)
+
+            newer = [o for o in options if ServerManager.is_version_at_least(o.version, installed_loader_version)]
+            return newer or list(options)
+
+        def load_loader_versions(mc_version: str) -> None:
             if not mc_version:
+                loader_fetch_mc["value"] = ""
+                loader_fetch_gen["value"] += 1
+                loader_options.clear()
+                selected_loader["value"] = ""
+                set_loader_version_message(
+                    loader_version_row, _("No versions found"), _("Select a Minecraft version")
+                )
+                primary_btn.set_sensitive(False)
                 return
 
-            if resolved_forge_mc["value"] == mc_version and (loader_values or forge_inflight["value"]):
+            if loader_fetch_mc["value"] == mc_version:
                 return
 
-            forge_resolve_gen["value"] += 1
-            gen = forge_resolve_gen["value"]
-            forge_inflight["value"] = True
-            resolved_forge_mc["value"] = mc_version
-
-            loader_values.clear()
+            loader_fetch_mc["value"] = mc_version
+            loader_fetch_gen["value"] += 1
+            gen = loader_fetch_gen["value"]
+            loader_options.clear()
             selected_loader["value"] = ""
-            loader_version_row.set_subtitle(_("Loading..."))
             primary_btn.set_sensitive(False)
 
-            def worker():
-                build = self._server_manager.download_manager.get_forge_recommended_build(mc_version)
+            set_loader_versions_loading(loader_version_row, mc_version)
 
+            def on_options(options):
                 def done():
-                    if gen != forge_resolve_gen["value"]:
+                    if gen != loader_fetch_gen["value"]:
                         return False
-                    forge_inflight["value"] = False
-                    if build:
-                        loader_values.append(build)
-                        selected_loader["value"] = build
-                        loader_version_row.set_subtitle(build)
-                    else:
-                        loader_version_row.set_subtitle(_("No Forge build for MC {}").format(mc_version))
-                    primary_btn.set_sensitive(bool(mc_values) and bool(loader_values))
+                    loader_options.clear()
+                    loader_options.extend(keep_upgrade_options(options))
+                    set_loader_versions(loader_version_row, loader_options, loader_type, mc_version)
+                    primary_btn.set_sensitive(bool(mc_values) and bool(loader_options))
                     return False
 
                 GLib.idle_add(done)
 
-            threading.Thread(target=worker, daemon=True).start()
+            download_manager.fetch_compatible_loader_versions_async(loader_type, mc_version, on_options)
 
         def validate(*_args):
             mc = selected_mc_version()
             update_java_info(mc)
-            if is_forge:
-                if not mc:
-                    primary_btn.set_sensitive(False)
-                    return
-                resolve_forge_build_async(mc)
-
-                return
-            primary_btn.set_sensitive(bool(mc_values) and bool(loader_values))
+            load_loader_versions(mc)
 
         mc_row.connect("notify::selected", validate)
 
@@ -496,7 +505,7 @@ class PropertiesView(Gtk.Box):
                 stack.set_visible_child_name("runtime")
                 cancel_btn.set_label(_("Cancel"))
                 primary_btn.set_label(_("Next"))
-                primary_btn.set_sensitive(bool(mc_values) and bool(loader_values))
+                primary_btn.set_sensitive(bool(mc_values) and bool(loader_options))
                 return
             if visible == "progress":
                 return
@@ -527,51 +536,32 @@ class PropertiesView(Gtk.Box):
             add_review_row(expander)
 
         def versions_worker():
-            loaders: list[str] = []
-            if is_forge:
-                games = self._server_manager.download_manager.fetch_forge_game_versions()
-            else:
-                games = self._server_manager.download_manager.fetch_game_versions()
-                loaders = self._server_manager.download_manager.fetch_loader_versions()
+            games = download_manager.fetch_game_versions_for_loader(loader_type)
 
             def loaded():
                 current_mc = self._server_info.mc_version
-                current_loader = self._server_info.loader_version
                 next_games = [v for v in games if ServerManager.is_version_after(v, current_mc)]
                 mc_values.clear()
                 mc_values.extend(next_games)
                 mc_row.set_model(Gtk.StringList.new(mc_values or [_("No versions found")]))
                 if mc_values:
                     mc_row.set_selected(0)
-                if is_forge:
-
-                    loader_values.clear()
-                    loader_version_row.set_subtitle(
-                        _("Select a Minecraft version") if not mc_values else _("Loading...")
-                    )
-                else:
-                    next_loaders = [
-                        v for v in loaders if not current_loader or ServerManager.is_version_at_least(v, current_loader)
-                    ]
-                    loader_values.clear()
-                    loader_values.extend(next_loaders)
-
-                    if loader_values:
-                        selected_loader["value"] = loader_values[0]
-                        loader_version_row.set_subtitle(loader_values[0])
                 validate()
                 return False
 
             GLib.idle_add(loaded)
 
         def show_mod_review(*_args):
-            if not mc_values or not loader_values:
+            if not mc_values or not loader_options:
                 return
             selected_mc["value"] = selected_mc_version()
             if not selected_mc["value"]:
                 return
 
-            selected_loader["value"] = loader_values[0]
+            selected_loader["value"] = selected_loader_version(loader_version_row, loader_options)
+            if not selected_loader["value"]:
+                return
+
             primary_btn.set_sensitive(False)
             primary_btn.set_label(_("Update"))
             cancel_btn.set_label(_("Back"))

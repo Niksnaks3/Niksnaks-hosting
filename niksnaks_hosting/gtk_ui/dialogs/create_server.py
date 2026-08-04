@@ -7,6 +7,14 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, GObject, Gtk
 
+from niksnaks_hosting.gtk_ui.loader_version_row import (
+    build_loader_version_row,
+    selected_loader_version,
+    set_loader_version_message,
+    set_loader_versions,
+    set_loader_versions_loading,
+)
+from niksnaks_hosting.shared.backend.download_manager import LoaderVersionOption
 from niksnaks_hosting.shared.backend.server_manager import ServerManager
 from niksnaks_hosting.shared.utils.constants import (
     DEFAULT_SERVER_PROPERTIES,
@@ -59,9 +67,10 @@ class CreateServerDialog(Adw.Dialog):
         super().__init__()
         self._server_manager = server_manager
         self._game_versions: list[str] = []
-        self._loader_versions: list[str] = []
+        self._loader_options: list[LoaderVersionOption] = []
         self._fetch_gen: int = 0
-        self._forge_resolve_gen: int = 0
+        self._loader_fetch_gen: int = 0
+        self._loader_fetch_key: tuple[str, str] = ("", "")
         self._icon_source_path: str = ""
         self._world_import_source_path: str = ""
 
@@ -231,20 +240,15 @@ class CreateServerDialog(Adw.Dialog):
         self._loader_row.connect("notify::selected", self._on_loader_changed)
         version_group.add(self._loader_row)
 
-        self._mc_version_list = Gtk.StringList.new([_("Loading...")])
         self._mc_version_row = Adw.ComboRow(
             title=_("Minecraft version"),
-            model=self._mc_version_list,
+            model=Gtk.StringList.new([_("Loading...")]),
         )
         self._mc_version_row.set_sensitive(False)
         self._mc_version_row.connect("notify::selected", self._on_mc_version_changed)
         version_group.add(self._mc_version_row)
 
-        self._loader_version_row = Adw.ActionRow(
-            title=_("Loader version"),
-            subtitle=_("Loading..."),
-        )
-        self._loader_version_row.set_activatable(False)
+        self._loader_version_row = build_loader_version_row()
         version_group.add(self._loader_version_row)
 
         java_labels = [f"Java {v}" for v in COMMON_JAVA_VERSIONS]
@@ -328,50 +332,50 @@ class CreateServerDialog(Adw.Dialog):
             return SUPPORTED_LOADERS[idx]
         return LOADER_FABRIC
 
+    def _selected_loader_version(self) -> str:
+        return selected_loader_version(self._loader_version_row, self._loader_options)
+
     def _fetch_versions(self):
         self._mc_version_row.set_sensitive(False)
         self._fetch_gen += 1
         gen = self._fetch_gen
 
-        def on_versions(game_vers, loader_vers):
+        def on_versions(game_vers):
             def apply():
                 if gen != self._fetch_gen:
                     return False
                 self._game_versions = game_vers
-                self._loader_versions = loader_vers
                 self._populate_versions()
                 return False
 
             GLib.idle_add(apply)
 
-        self._server_manager.download_manager.fetch_versions_for_loader_async(
+        self._server_manager.download_manager.fetch_game_versions_for_loader_async(
             self._selected_loader(), on_versions
         )
 
     def _on_loader_changed(self, *_args):
         self._game_versions = []
-        self._loader_versions = []
+        self._loader_options = []
+        self._loader_fetch_gen += 1
+        self._loader_fetch_key = ("", "")
 
-        self._forge_resolve_gen += 1
-        self._mc_version_list = Gtk.StringList.new([_("Loading...")])
-        self._mc_version_row.set_model(self._mc_version_list)
-        self._loader_version_row.set_subtitle(_("Loading..."))
+        self._mc_version_row.set_model(Gtk.StringList.new([_("Loading...")]))
+        set_loader_version_message(self._loader_version_row, _("Loading..."), _("Select a Minecraft version"))
         self._fetch_versions()
         self._validate()
 
     def _populate_versions(self):
         if self._game_versions:
-            new_list = Gtk.StringList.new(self._game_versions)
-            self._mc_version_row.set_model(new_list)
+            self._mc_version_row.set_model(Gtk.StringList.new(self._game_versions))
             self._mc_version_row.set_sensitive(True)
             self._mc_version_row.set_selected(0)
             self._on_mc_version_changed(self._mc_version_row, None)
         else:
-            self._loader_version_row.set_subtitle(_("No versions found"))
-
-        if self._selected_loader() == LOADER_FABRIC and self._loader_versions:
-
-            self._loader_version_row.set_subtitle(self._loader_versions[0])
+            self._mc_version_row.set_model(Gtk.StringList.new([_("No versions found")]))
+            set_loader_version_message(
+                self._loader_version_row, _("No versions found"), _("Select a Minecraft version")
+            )
 
         self._validate()
 
@@ -381,34 +385,34 @@ class CreateServerDialog(Adw.Dialog):
             mc_ver = self._game_versions[idx]
             java_ver = get_required_java_version(mc_ver)
             self._select_java_version(java_ver)
-            if self._selected_loader() == LOADER_FORGE:
-                self._resolve_forge_build(mc_ver)
+            self._load_loader_versions(mc_ver)
 
         self._validate()
 
-    def _resolve_forge_build(self, mc_ver: str) -> None:
-        self._loader_versions = []
-        self._loader_version_row.set_subtitle(_("Loading..."))
-        self._forge_resolve_gen += 1
-        gen = self._forge_resolve_gen
+    def _load_loader_versions(self, mc_version: str) -> None:
+        loader = self._selected_loader()
+        if self._loader_fetch_key == (loader, mc_version):
+            return
 
-        def worker():
-            build = self._server_manager.download_manager.get_forge_recommended_build(mc_ver)
+        self._loader_fetch_key = (loader, mc_version)
+        self._loader_options = []
+        self._loader_fetch_gen += 1
+        gen = self._loader_fetch_gen
 
+        set_loader_versions_loading(self._loader_version_row, mc_version)
+
+        def on_options(options):
             def done():
-                if gen != self._forge_resolve_gen or self._selected_loader() != LOADER_FORGE:
+                if gen != self._loader_fetch_gen:
                     return False
-                self._loader_versions = [build] if build else []
-                if build:
-                    self._loader_version_row.set_subtitle(build)
-                else:
-                    self._loader_version_row.set_subtitle(_("No Forge build for MC {}").format(mc_ver))
+                self._loader_options = options
+                set_loader_versions(self._loader_version_row, options, loader, mc_version)
                 self._validate()
                 return False
 
             GLib.idle_add(done)
 
-        threading.Thread(target=worker, daemon=True).start()
+        self._server_manager.download_manager.fetch_compatible_loader_versions_async(loader, mc_version, on_options)
 
     def _select_java_version(self, java_ver: int) -> None:
         closest = min(COMMON_JAVA_VERSIONS, key=lambda v: abs(v - java_ver))
@@ -535,7 +539,7 @@ class CreateServerDialog(Adw.Dialog):
 
     def _validate(self, *args):
         name = self._name_entry.get_text().strip()
-        has_versions = len(self._game_versions) > 0 and len(self._loader_versions) > 0
+        has_versions = len(self._game_versions) > 0 and len(self._loader_options) > 0
         page = self._stack.get_visible_child_name()
 
         if page == "details":
@@ -574,7 +578,7 @@ class CreateServerDialog(Adw.Dialog):
         mc_idx = self._mc_version_row.get_selected()
         mc_version = self._game_versions[mc_idx] if mc_idx < len(self._game_versions) else ""
 
-        loader_version = self._loader_versions[0] if self._loader_versions else ""
+        loader_version = self._selected_loader_version()
         loader_type = self._selected_loader()
         ram_mb = int(self._ram_row.get_value())
         seed = self._seed_entry.get_text().strip()
