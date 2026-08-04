@@ -11,7 +11,7 @@ def show_about_dialog(parent):
     about.set_application_name(APP_NAME)
     about.set_application_icon(APP_ID)
     about.set_version(APP_VERSION)
-    about.set_developer_name("Sugarycandybar")
+    about.set_developer_name("niksnaks3")
     about.set_license_type(Gtk.License.GPL_3_0)
     about.set_comments(
         _("A modern application for creating, running, and managing Fabric Minecraft servers with ease.")

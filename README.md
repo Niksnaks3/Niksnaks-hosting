@@ -151,5 +151,5 @@ meson.build                # Build definition
 
 ## Acknowledgements
 
-Developed by **Sugarycandybar**. Thanks to the [Modrinth](https://modrinth.com) and
+Developed by **niksnaks3**. Thanks to the [Modrinth](https://modrinth.com) and
 [Playit](https://playit.gg) projects whose APIs make key features possible.

@@ -1,5 +1,5 @@
 #define AppName "Niksnaks-Hosting"
-#define AppPublisher "Sugarycandybar"
+#define AppPublisher "niksnaks3"
 #define AppURL ""
 #define AppExeName "Niksnaks-Hosting.exe"
 
