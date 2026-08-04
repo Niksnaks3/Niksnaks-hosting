@@ -82,7 +82,18 @@ class PlayersMixin:
         root = self._server_dir()
         if not root:
             return None, None
+        # Bedrock calls it the allow list, and has no ban list of its own.
+        if self._is_bedrock_server():
+            return root / "allowlist.json", None
         return root / "whitelist.json", root / "banned-players.json"
+
+    def _whitelist_property(self) -> str:
+        return "allow-list" if self._is_bedrock_server() else "white-list"
+
+    def _whitelist_command(self, action: str, name: str) -> str:
+        if self._is_bedrock_server():
+            return f'allowlist {action} "{name}"'
+        return f"whitelist {action} {name}"
 
     def _read_player_list(self, path: Path | None) -> list[dict]:
         if not path or not path.exists():
@@ -138,7 +149,7 @@ class PlayersMixin:
             self._clear_player_group_rows(row)
 
         whitelist_path, banned_path = self._player_list_paths()
-        if not whitelist_path or not banned_path:
+        if not whitelist_path:
             self._update_player_section_summaries(0, 0)
             for row in self._whitelist_list_rows:
                 self._add_info_row(row, _("No server selected"))
@@ -155,7 +166,10 @@ class PlayersMixin:
         else:
             for entry in whitelist:
                 name = str(entry.get("name", "")).strip()
-                subtitle = str(entry.get("uuid", _("Unknown UUID")))
+                # Bedrock stores an XUID, and only once the player has actually joined.
+                subtitle = str(entry.get("uuid") or entry.get("xuid") or "") or (
+                    _("Unknown XUID") if self._is_bedrock_server() else _("Unknown UUID")
+                )
                 for container in self._whitelist_list_rows:
                     row = Adw.ActionRow(title=name)
                     row.set_subtitle(subtitle)
@@ -298,12 +312,15 @@ class PlayersMixin:
             process = self._server_manager.get_process(self._server_info.id)
         if process and process.is_running:
             if list_type == "whitelist":
-                process.send_command(f"whitelist add {name}")
+                process.send_command(self._whitelist_command("add", name))
             else:
                 process.send_command(f"ban {name} {reason_text}")
 
+        bedrock = self._is_bedrock_server()
+
         def worker():
-            resolved_name, resolved_uuid = self._resolve_profile(name)
+            # Mojang's profile API only knows Java accounts; Bedrock names stand on their own.
+            resolved_name, resolved_uuid = (name, "") if bedrock else self._resolve_profile(name)
 
             def ui_apply():
                 entries = self._read_player_list(path)
@@ -312,7 +329,10 @@ class PlayersMixin:
                     return
 
                 if list_type == "whitelist":
-                    entries.append({"uuid": resolved_uuid, "name": resolved_name})
+                    if bedrock:
+                        entries.append({"ignoresPlayerLimit": False, "name": resolved_name})
+                    else:
+                        entries.append({"uuid": resolved_uuid, "name": resolved_name})
                     saved = self._write_player_list(path, entries)
                     if saved:
                         self._toast(_("Added {} to whitelist").format(resolved_name))
@@ -356,7 +376,7 @@ class PlayersMixin:
             if self._server_manager and self._server_info:
                 process = self._server_manager.get_process(self._server_info.id)
             if process and process.is_running:
-                process.send_command(f"whitelist remove {name}")
+                process.send_command(self._whitelist_command("remove", name))
             self._refresh_player_lists()
 
             def undo_remove():
@@ -371,7 +391,7 @@ class PlayersMixin:
                 merged = sorted(merged, key=lambda e: str(e.get("name", "")).lower())
                 if self._write_player_list(whitelist_path, merged):
                     if process and process.is_running:
-                        process.send_command(f"whitelist add {name}")
+                        process.send_command(self._whitelist_command("add", name))
                     self._refresh_player_lists()
                     self._toast(_("Restored {} to whitelist").format(name))
 

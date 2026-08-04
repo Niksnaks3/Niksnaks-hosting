@@ -9,6 +9,8 @@ gi.require_version("Adw", "1")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Adw, Gdk, Gtk
 
+from niksnaks_hosting.shared.utils.constants import is_bedrock
+
 PLAYIT_DASHBOARD_URL = "https://playit.gg/account/tunnels"
 
 from ..utils import *
@@ -57,11 +59,25 @@ class LocalIpMixin:
 
         return _("Not available")
 
+    def _local_connect_port(self) -> int | None:
+        """Port LAN players must type in, or None when the client's default is right.
+
+        Bedrock clients always ask for a port, and the Bedrock default (19132) differs
+        from the Java one, so spell it out rather than leaving players to guess.
+        """
+        server_info = getattr(self, "_server_info", None)
+        manager = getattr(self, "_server_manager", None)
+        if not server_info or not manager or not is_bedrock(server_info.edition):
+            return None
+        return manager.playit_manager._read_server_port(str(server_info.server_dir))
+
     def _refresh_local_ip_row(self):
         ip = self._get_local_ip()
         self._local_ip_value = ip
+        port = self._local_connect_port()
+        subtitle = _("{} · port {}").format(ip, port) if port else ip
         for row in self._local_ip_rows:
-            row.set_subtitle(ip)
+            row.set_subtitle(subtitle)
 
     def _on_copy_local_ip(self, *_args):
         ip = self._local_ip_value.strip()

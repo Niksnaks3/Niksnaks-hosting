@@ -17,7 +17,7 @@ from pathlib import Path
 import requests
 
 from niksnaks_hosting.shared.core.events import EventEmitter
-from niksnaks_hosting.shared.utils.constants import DATA_DIR
+from niksnaks_hosting.shared.utils.constants import BEDROCK_SERVER_BINARY, DATA_DIR
 from niksnaks_hosting.shared.utils.net import make_ssl_context
 from niksnaks_hosting.shared.utils.subprocess_utils import hidden_subprocess_kwargs
 
@@ -1561,7 +1561,14 @@ class PlayitManager(EventEmitter):
 
         return "\n".join(out) + "\n"
 
+    @staticmethod
+    def _is_bedrock_install(server_dir: str) -> bool:
+        """Geyser, Floodgate and Voice Chat are Java mods with nothing to configure here."""
+        return (Path(server_dir) / BEDROCK_SERVER_BINARY).is_file()
+
     def configure_geyser_mod(self, server_dir: str, bedrock_port: int = 19132) -> bool:
+        if self._is_bedrock_install(server_dir):
+            return True
         try:
             port = int(bedrock_port)
         except Exception:
@@ -1580,6 +1587,8 @@ class PlayitManager(EventEmitter):
             return False
 
     def configure_floodgate_mod(self, server_dir: str) -> bool:
+        if self._is_bedrock_install(server_dir):
+            return True
         config_dir = Path(server_dir) / "config" / "Geyser-Fabric"
         config_file = config_dir / "config.yml"
         try:
@@ -1630,6 +1639,8 @@ class PlayitManager(EventEmitter):
         endpoint: str = "",
         voicechat_port: int = 0,
     ) -> bool:
+        if self._is_bedrock_install(server_dir):
+            return True
 
         domain, remote_port = _split_endpoint(endpoint)
         voice_tunnel = None

@@ -42,6 +42,17 @@
   </branding>
   <launchable type="desktop-id">com.niksnakshosting.NiksnaksHosting.desktop</launchable>
   <releases>
+    <release version="1.1" date="2026-08-04">
+      <description>
+        <p>Minecraft Bedrock Edition support:</p>
+        <ul>
+          <li>Choose Java or Bedrock Edition when creating a server</li>
+          <li>Bedrock servers use Mojang's Dedicated Server build, with their own properties editor</li>
+          <li>Allow list, worlds, backups and updates all work on Bedrock</li>
+          <li>Pick a specific Fabric loader or Forge build for the selected Minecraft version</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.7.8" date="2026-07-25">
       <description>
         <p>Minor bug fixes and improvements:</p>

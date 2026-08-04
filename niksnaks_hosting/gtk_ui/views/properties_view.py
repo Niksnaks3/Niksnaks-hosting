@@ -17,6 +17,11 @@ from niksnaks_hosting.shared.backend.config_manager import ConfigManager
 from niksnaks_hosting.shared.backend.download_manager import LoaderVersionOption
 from niksnaks_hosting.shared.backend.server_manager import ServerInfo, ServerManager
 from niksnaks_hosting.shared.utils.constants import (
+    BEDROCK_CHAT_RESTRICTIONS,
+    BEDROCK_DEFAULT_PORT,
+    BEDROCK_DEFAULT_PORT_V6,
+    BEDROCK_GAMEMODES,
+    BEDROCK_PERMISSION_LEVELS,
     DEFAULT_RAM_MB,
     DEFAULT_SERVER_PROPERTIES,
     DIFFICULTIES,
@@ -24,8 +29,10 @@ from niksnaks_hosting.shared.utils.constants import (
     LOADER_FORGE,
     MAX_RAM_MB,
     MIN_RAM_MB,
+    get_edition_display_name,
     get_loader_display_name,
     get_required_java_version,
+    is_bedrock,
 )
 
 DIFFICULTY_MODES = [*DIFFICULTIES, "hardcore"]
@@ -39,7 +46,11 @@ class PropertiesView(Gtk.Box):
         self._config: ConfigManager | None = None
         self._server_manager: ServerManager | None = None
         self._server_info: ServerInfo | None = None
-        self._widgets: dict = {}
+        self._java_widgets: dict = {}
+        self._bedrock_widgets: dict = {}
+        self._widgets: dict = self._java_widgets
+        self._java_only_widgets: list[Gtk.Widget] = []
+        self._bedrock_only_widgets: list[Gtk.Widget] = []
         self._ram_row: Adw.SpinRow | None = None
         self._suppress_changes = False
         self._app_toast_overlay = toast_overlay
@@ -76,18 +87,20 @@ class PropertiesView(Gtk.Box):
         self._version_row.add_suffix(self._change_version_btn)
         general.add(self._version_row)
 
-        self._widgets["motd"] = self._add_entry_row(general, _("Message of the Day"), "motd", _("a Niksnaks-Hosting server"))
+        self._java_widgets["motd"] = self._add_entry_row(
+            general, _("Message of the Day"), "motd", _("a Niksnaks-Hosting server")
+        )
 
-        self._widgets["max-players"] = self._add_spin_row(general, _("Max Players"), "max-players", 1, 1000, 20)
+        self._java_widgets["max-players"] = self._add_spin_row(general, _("Max Players"), "max-players", 1, 1000, 20)
         default_difficulty_mode = (
             "hardcore"
             if str(DEFAULT_SERVER_PROPERTIES.get("hardcore", "false")).lower() == "true"
             else str(DEFAULT_SERVER_PROPERTIES.get("difficulty", "easy"))
         )
-        self._widgets["difficulty"] = self._add_combo_row(
+        self._java_widgets["difficulty"] = self._add_combo_row(
             general, _("Difficulty"), "difficulty", DIFFICULTY_MODES, default_difficulty_mode
         )
-        self._widgets["gamemode"] = self._add_combo_row(
+        self._java_widgets["gamemode"] = self._add_combo_row(
             general, _("Default Gamemode"), "gamemode", GAMEMODES, "survival"
         )
 
@@ -108,6 +121,7 @@ class PropertiesView(Gtk.Box):
         self._ram_row.set_tooltip_text(_("Megabytes for the Java heap. Range {}–{}.").format(MIN_RAM_MB, MAX_RAM_MB))
         resources.add(self._ram_row)
         page.add(resources)
+        self._resources_group = resources
 
         java_group = Adw.PreferencesGroup(title=_("Java Runtime"))
 
@@ -129,14 +143,14 @@ class PropertiesView(Gtk.Box):
 
         world = Adw.PreferencesGroup(title=_("World"))
 
-        self._widgets["view-distance"] = self._add_spin_row(world, _("View Distance"), "view-distance", 2, 32, 10)
-        self._widgets["simulation-distance"] = self._add_spin_row(
+        self._java_widgets["view-distance"] = self._add_spin_row(world, _("View Distance"), "view-distance", 2, 32, 10)
+        self._java_widgets["simulation-distance"] = self._add_spin_row(
             world, _("Simulation Distance"), "simulation-distance", 2, 32, 10
         )
-        self._widgets["spawn-protection"] = self._add_spin_row(
+        self._java_widgets["spawn-protection"] = self._add_spin_row(
             world, _("Spawn Protection Radius"), "spawn-protection", 0, 256, 16
         )
-        self._widgets["max-world-size"] = self._add_spin_row(
+        self._java_widgets["max-world-size"] = self._add_spin_row(
             world, _("Max World Size"), "max-world-size", 1000, 29999984, 29999984
         )
 
@@ -144,15 +158,15 @@ class PropertiesView(Gtk.Box):
 
         network = Adw.PreferencesGroup(title=_("Network"))
 
-        self._widgets["enable-query"] = self._add_switch_row(network, _("Enable Query"), "enable-query", False, "")
+        self._java_widgets["enable-query"] = self._add_switch_row(network, _("Enable Query"), "enable-query", False, "")
 
         page.add(network)
 
         players = Adw.PreferencesGroup(title=_("Players"))
 
-        self._widgets["pvp"] = self._add_switch_row(players, _("PvP"), "pvp", True, "")
-        self._widgets["allow-flight"] = self._add_switch_row(players, _("Allow Flight"), "allow-flight", False, "")
-        self._widgets["keep-inventory"] = self._add_switch_row(
+        self._java_widgets["pvp"] = self._add_switch_row(players, _("PvP"), "pvp", True, "")
+        self._java_widgets["allow-flight"] = self._add_switch_row(players, _("Allow Flight"), "allow-flight", False, "")
+        self._java_widgets["keep-inventory"] = self._add_switch_row(
             players, _("Keep Inventory"), "keep-inventory", False, ""
         )
 
@@ -160,19 +174,138 @@ class PropertiesView(Gtk.Box):
 
         advanced = Adw.PreferencesGroup(title=_("Advanced"))
 
-        self._widgets["enable-command-block"] = self._add_switch_row(
+        self._java_widgets["enable-command-block"] = self._add_switch_row(
             advanced, _("Command Blocks"), "enable-command-block", False, ""
         )
-        self._widgets["allow-nether"] = self._add_switch_row(advanced, _("Allow Nether"), "allow-nether", True, "")
+        self._java_widgets["allow-nether"] = self._add_switch_row(advanced, _("Allow Nether"), "allow-nether", True, "")
 
-        self._widgets["online-mode"] = self._add_switch_row(advanced, _("Online Mode"), "online-mode", True, "")
+        self._java_widgets["online-mode"] = self._add_switch_row(advanced, _("Online Mode"), "online-mode", True, "")
 
         page.add(advanced)
+
+        self._java_only_widgets = [
+            self._java_widgets["motd"],
+            self._java_widgets["max-players"],
+            self._java_widgets["difficulty"],
+            self._java_widgets["gamemode"],
+            java_group,
+            world,
+            network,
+            players,
+            advanced,
+        ]
+
+        self._build_bedrock_groups(page, general)
 
         scrolled.set_child(page)
         self.append(scrolled)
 
         self._connect_auto_save_signals()
+
+    def _build_bedrock_groups(self, page: Adw.PreferencesPage, general: Adw.PreferencesGroup) -> None:
+
+        widgets = self._bedrock_widgets
+
+        # These sit in the shared General group, below the version row, and are
+        # shown only while a Bedrock server is selected.
+        widgets["server-name"] = self._add_entry_row(
+            general, _("Server Name"), "server-name", _("a Niksnaks-Hosting server")
+        )
+        widgets["max-players"] = self._add_spin_row(general, _("Max Players"), "max-players", 1, 1000, 10)
+        widgets["difficulty"] = self._add_combo_row(general, _("Difficulty"), "difficulty", DIFFICULTIES, "easy")
+        widgets["gamemode"] = self._add_combo_row(
+            general, _("Default Gamemode"), "gamemode", BEDROCK_GAMEMODES, "survival"
+        )
+        widgets["force-gamemode"] = self._add_switch_row(general, _("Force Gamemode"), "force-gamemode", False, "")
+
+        world = Adw.PreferencesGroup(title=_("World"))
+        widgets["level-name"] = self._add_entry_row(world, _("World Name"), "level-name", "Bedrock level")
+        widgets["view-distance"] = self._add_spin_row(world, _("View Distance"), "view-distance", 4, 64, 32)
+        widgets["tick-distance"] = self._add_spin_row(world, _("Tick Distance"), "tick-distance", 4, 12, 4)
+        widgets["player-idle-timeout"] = self._add_spin_row(
+            world, _("Player Idle Timeout (minutes)"), "player-idle-timeout", 0, 600, 30
+        )
+        page.add(world)
+
+        network = Adw.PreferencesGroup(title=_("Network"))
+        widgets["server-port"] = self._add_spin_row(
+            network, _("Port (IPv4)"), "server-port", 1024, 65535, BEDROCK_DEFAULT_PORT
+        )
+        widgets["server-portv6"] = self._add_spin_row(
+            network, _("Port (IPv6)"), "server-portv6", 1024, 65535, BEDROCK_DEFAULT_PORT_V6
+        )
+        widgets["enable-lan-visibility"] = self._add_switch_row(
+            network, _("Visible on LAN"), "enable-lan-visibility", True, ""
+        )
+        page.add(network)
+
+        players = Adw.PreferencesGroup(title=_("Players"))
+        widgets["allow-cheats"] = self._add_switch_row(players, _("Allow Cheats"), "allow-cheats", False, "")
+        widgets["online-mode"] = self._add_switch_row(players, _("Online Mode"), "online-mode", True, "")
+        widgets["allow-list"] = self._add_switch_row(
+            players, _("Allow List"), "allow-list", False, _("Only players in allowlist.json can join")
+        )
+        widgets["default-player-permission-level"] = self._add_combo_row(
+            players,
+            _("Default Permission Level"),
+            "default-player-permission-level",
+            BEDROCK_PERMISSION_LEVELS,
+            "member",
+        )
+        widgets["texturepack-required"] = self._add_switch_row(
+            players, _("Require Resource Pack"), "texturepack-required", False, ""
+        )
+        page.add(players)
+
+        advanced = Adw.PreferencesGroup(title=_("Advanced"))
+        widgets["max-threads"] = self._add_spin_row(advanced, _("Max Threads"), "max-threads", 0, 32, 8)
+        widgets["chat-restriction"] = self._add_combo_row(
+            advanced, _("Chat Restriction"), "chat-restriction", BEDROCK_CHAT_RESTRICTIONS, "None"
+        )
+        widgets["disable-player-interaction"] = self._add_switch_row(
+            advanced, _("Disable Player Interaction"), "disable-player-interaction", False, ""
+        )
+        widgets["disable-custom-skins"] = self._add_switch_row(
+            advanced, _("Disable Custom Skins"), "disable-custom-skins", False, ""
+        )
+        page.add(advanced)
+
+        self._bedrock_only_widgets = [
+            widgets["server-name"],
+            widgets["max-players"],
+            widgets["difficulty"],
+            widgets["gamemode"],
+            widgets["force-gamemode"],
+            world,
+            network,
+            players,
+            advanced,
+        ]
+
+    def _is_bedrock_server(self) -> bool:
+        return bool(self._server_info and is_bedrock(self._server_info.edition))
+
+    def _apply_edition_layout(self) -> None:
+
+        bedrock = self._is_bedrock_server()
+        self._widgets = self._bedrock_widgets if bedrock else self._java_widgets
+
+        for widget in self._java_only_widgets:
+            widget.set_visible(not bedrock)
+        for widget in self._bedrock_only_widgets:
+            widget.set_visible(bedrock)
+
+        # Bedrock has no heap to allocate, so the same number becomes an OS-enforced ceiling.
+        if self._ram_row:
+            self._ram_row.set_title(_("Memory Limit (MB)") if bedrock else _("Allocated RAM (MB)"))
+            self._ram_row.set_subtitle(
+                _("Hard ceiling enforced by the system; the server stops if it is exceeded") if bedrock else ""
+            )
+            self._ram_row.set_tooltip_text(
+                _("Bedrock Dedicated Server has no heap setting, so this limit is applied by the operating system.")
+                if bedrock
+                else _("Megabytes for the Java heap. Range {}–{}.").format(MIN_RAM_MB, MAX_RAM_MB)
+            )
 
     def _on_java_version_changed(self, *_args) -> None:
         if self._suppress_changes or not self._server_manager or not self._server_info:
@@ -203,7 +336,7 @@ class PropertiesView(Gtk.Box):
         self._check_restart_banner()
 
     def _connect_auto_save_signals(self):
-        for widget in self._widgets.values():
+        for widget in [*self._java_widgets.values(), *self._bedrock_widgets.values()]:
             if isinstance(widget, Adw.SpinRow):
                 widget.connect("notify::value", self._on_widget_changed)
             elif isinstance(widget, Adw.EntryRow):
@@ -302,11 +435,17 @@ class PropertiesView(Gtk.Box):
         self._server_manager = server_manager
         self._server_info = server_info
 
+        self._apply_edition_layout()
+
         if self._server_info and hasattr(self, "_version_row"):
-            loader_display = get_loader_display_name(self._server_info.loader_type)
-            version_text = f"{loader_display} · {self._server_info.mc_version or _('Unknown')}"
-            if self._server_info.loader_version:
-                version_text += f" ({self._server_info.loader_version})"
+            if is_bedrock(self._server_info.edition):
+                edition_display = get_edition_display_name(self._server_info.edition)
+                version_text = f"{edition_display} · {self._server_info.mc_version or _('Unknown')}"
+            else:
+                loader_display = get_loader_display_name(self._server_info.loader_type)
+                version_text = f"{loader_display} · {self._server_info.mc_version or _('Unknown')}"
+                if self._server_info.loader_version:
+                    version_text += f" ({self._server_info.loader_version})"
             self._version_row.set_subtitle(version_text)
 
         if config:
@@ -320,10 +459,14 @@ class PropertiesView(Gtk.Box):
             return
         self._change_version_btn.set_sensitive(False)
         self._change_version_btn.set_tooltip_text(_("Checking for newer Minecraft versions..."))
+        bedrock = self._is_bedrock_server()
 
         def worker():
-            versions = self._server_manager.download_manager.fetch_game_versions()
             current = self._server_info.mc_version
+            if bedrock:
+                versions = [option.version for option in self._server_manager.bedrock_manager.fetch_versions()]
+            else:
+                versions = self._server_manager.download_manager.fetch_game_versions()
             has_upgrade = any(ServerManager.is_version_after(v, current) for v in versions)
 
             def done():
@@ -341,6 +484,10 @@ class PropertiesView(Gtk.Box):
     def _on_change_version_clicked(self, button):
         if not self._server_manager or not self._server_info:
             self._show_toast(_("Select a server first"), timeout=3)
+            return
+
+        if self._is_bedrock_server():
+            self._show_bedrock_update_dialog()
             return
 
         download_manager = self._server_manager.download_manager
@@ -685,6 +832,120 @@ class PropertiesView(Gtk.Box):
         threading.Thread(target=versions_worker, daemon=True).start()
         dialog.present(self.get_root())
 
+    def _show_bedrock_update_dialog(self):
+
+        server_manager = self._server_manager
+        server_info = self._server_info
+
+        dialog = Adw.Dialog()
+        dialog.set_title(_("Update Version"))
+        dialog.set_content_width(520)
+        dialog.set_content_height(320)
+
+        toolbar = Adw.ToolbarView()
+        header = Adw.HeaderBar()
+        header.set_show_start_title_buttons(False)
+        header.set_show_end_title_buttons(False)
+        cancel_btn = Gtk.Button(label=_("Cancel"))
+        primary_btn = Gtk.Button(label=_("Update"))
+        primary_btn.add_css_class("suggested-action")
+        primary_btn.set_sensitive(False)
+        header.pack_start(cancel_btn)
+        header.pack_end(primary_btn)
+        toolbar.add_top_bar(header)
+
+        page = Adw.PreferencesPage()
+        group = Adw.PreferencesGroup(
+            title=_("Runtime"),
+            description=_("Worlds, server.properties and the allow list are kept. A full backup is made first."),
+        )
+        version_row = Adw.ComboRow(
+            title=_("Bedrock version"),
+            subtitle=_("Currently {}").format(server_info.mc_version or _("Unknown")),
+            model=Gtk.StringList.new([_("Loading...")]),
+        )
+        version_row.set_sensitive(False)
+        group.add(version_row)
+
+        progress_row = Adw.ActionRow(title=_("Updating server"), subtitle="")
+        progress_row.set_visible(False)
+        group.add(progress_row)
+        progress_bar = Gtk.ProgressBar()
+        progress_bar.set_margin_top(12)
+        progress_bar.set_visible(False)
+        group.add(progress_bar)
+
+        page.add(group)
+        toolbar.set_content(page)
+        dialog.set_child(toolbar)
+
+        options: list = []
+
+        def on_versions(fetched):
+            def done():
+                options.clear()
+                options.extend(fetched)
+                if options:
+                    version_row.set_model(Gtk.StringList.new([option.label for option in options]))
+                    version_row.set_sensitive(True)
+                    primary_btn.set_sensitive(True)
+                else:
+                    version_row.set_model(Gtk.StringList.new([_("No versions found")]))
+                return False
+
+            GLib.idle_add(done)
+
+        server_manager.bedrock_manager.fetch_versions_async(on_versions)
+
+        cancel_btn.connect("clicked", lambda *_a: dialog.close())
+
+        def on_update(*_args):
+            idx = int(version_row.get_selected())
+            if idx < 0 or idx >= len(options):
+                return
+            option = options[idx]
+
+            primary_btn.set_sensitive(False)
+            cancel_btn.set_sensitive(False)
+            version_row.set_sensitive(False)
+            progress_row.set_visible(True)
+            progress_bar.set_visible(True)
+
+            def progress(frac, message):
+                def update():
+                    progress_bar.set_fraction(max(0.0, min(1.0, float(frac))))
+                    progress_row.set_subtitle(str(message))
+                    return False
+
+                GLib.idle_add(update)
+
+            def worker():
+                ok, msg = server_manager.update_bedrock_server(server_info.id, option, progress_callback=progress)
+
+                def done():
+                    if ok:
+                        self._version_row.set_subtitle(
+                            f"{get_edition_display_name(server_info.edition)} · {option.version}"
+                        )
+                        self._refresh_upgrade_button()
+                        self._show_toast(msg, timeout=4)
+                        dialog.close()
+                    else:
+                        cancel_btn.set_sensitive(True)
+                        primary_btn.set_sensitive(True)
+                        version_row.set_sensitive(True)
+                        progress_row.set_visible(False)
+                        progress_bar.set_visible(False)
+                        self._show_toast(msg, timeout=5)
+                    return False
+
+                GLib.idle_add(done)
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        primary_btn.connect("clicked", on_update)
+        dialog.present(self.get_root())
+
     def reload_from_disk(self):
         if not self._config:
             return
@@ -692,7 +953,7 @@ class PropertiesView(Gtk.Box):
         self._populate()
 
     def _populate_java_settings(self):
-        if not self._server_info:
+        if not self._server_info or self._is_bedrock_server():
             return
         self._suppress_changes = True
 
@@ -729,7 +990,7 @@ class PropertiesView(Gtk.Box):
                 widget.set_active(val)
             elif isinstance(widget, Adw.ComboRow):
                 options = widget._options
-                if key == "difficulty":
+                if key == "difficulty" and not self._is_bedrock_server():
 
                     val = "hardcore" if self._config.get_bool("hardcore", False) else self._config.get("difficulty", "")
                     try:
@@ -800,7 +1061,7 @@ class PropertiesView(Gtk.Box):
             elif isinstance(widget, Adw.ComboRow):
                 idx = widget.get_selected()
                 options = widget._options
-                if key == "difficulty":
+                if key == "difficulty" and not self._is_bedrock_server():
                     val = options[idx] if idx < len(options) else options[0]
                     if val == "hardcore":
                         self._config.set_value("difficulty", "hard")

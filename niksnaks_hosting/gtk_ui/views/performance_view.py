@@ -99,6 +99,9 @@ class MetricCard(Gtk.Box):
     def set_max_value(self, max_value):
         self._max_value = max_value
 
+    def set_subtitle(self, text):
+        self._title_label.set_label(text)
+
     def add_value(self, value, text):
         norm = (value / self._max_value) * 100 if self._max_value > 0 else 0
         norm = max(0, min(100, norm))
@@ -142,10 +145,10 @@ class PerformanceView(Gtk.Box):
         self._ram_card = MetricCard("RAM", _("Allocated RAM Consumed"), "GB", (0.48, 0.42, 0.94), 100.0)
         content.append(self._ram_card)
 
-        tps_title = Gtk.Label(label=_("Ticks Per Second"), xalign=0)
-        tps_title.add_css_class("title-4")
-        tps_title.set_margin_bottom(4)
-        content.append(tps_title)
+        self._tps_title = Gtk.Label(label=_("Ticks Per Second"), xalign=0)
+        self._tps_title.add_css_class("title-4")
+        self._tps_title.set_margin_bottom(4)
+        content.append(self._tps_title)
         self._tps_card = MetricCard("TPS", _("Server Ticks"), "t/s", (0.97, 0.65, 0.14), 20.0)
         content.append(self._tps_card)
 
@@ -184,6 +187,17 @@ class PerformanceView(Gtk.Box):
                 except Exception:
                     pass
             self._tps_handler_id = process.connect("output-received", self._on_output_for_tps)
+
+            # Bedrock Dedicated Server never logs the tick-lag line the TPS reading is
+            # derived from, so that card would only ever show a made-up 20 t/s.
+            bedrock = process.is_bedrock
+            self._tps_title.set_visible(not bedrock)
+            self._tps_card.set_visible(not bedrock)
+
+            # Its memory ceiling is imposed by the OS rather than a JVM heap, but it is a
+            # real ceiling either way, so the gauge means the same thing.
+            self._ram_card.set_subtitle(_("Memory Limit Used") if bedrock else _("Allocated RAM Consumed"))
+            self._ram_alloc_row.set_title(_("Memory Limit") if bedrock else _("RAM Allocation"))
 
             max_ram_mb = process.ram_mb
             self._ram_card.set_max_value(max_ram_mb)
@@ -251,7 +265,8 @@ class PerformanceView(Gtk.Box):
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 self._psutil_process = None
 
-        self._tps_card.add_value(self._tps_value, f"{self._tps_value:.1f}")
+        if self._tps_card.get_visible():
+            self._tps_card.add_value(self._tps_value, f"{self._tps_value:.1f}")
 
         return True
 

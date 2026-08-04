@@ -14,6 +14,9 @@ Built with Python and GTK 4 / libadwaita, it fits naturally into the GNOME deskt
 
 - **One-click server setup** — install server files and the matching Java runtime
   automatically; run multiple servers side by side.
+- **Java or Bedrock** — pick the edition when you create a server. Bedrock servers use
+  Mojang's Dedicated Server build and get the same console, backups, allow list, and
+  properties editor, tuned to Bedrock's own settings.
 - **Version picker** — choose a Minecraft version, then pick any Fabric loader or Forge
   build published for it, with the recommended one selected by default.
 - **Built-in Modrinth browser** — discover and install mods and modpacks straight from
@@ -96,10 +99,15 @@ python niksnaks_hosting.py
 ## Usage
 
 Launch **Niksnaks-Hosting** from your application menu, or run `niksnaks-hosting` from a
-terminal. Create a new server, pick a loader and Minecraft version, and the app handles
-the rest — downloading files, setting up Java, and starting the server. From there you
-can install mods from Modrinth, configure a Playit tunnel, watch the console, tweak
+terminal. Create a new server, choose Java or Bedrock Edition, pick a version, and the app
+handles the rest — downloading files, setting up Java, and starting the server. From there
+you can install mods from Modrinth, configure a Playit tunnel, watch the console, tweak
 properties, and take backups.
+
+Bedrock servers run Mojang's Bedrock Dedicated Server, which is a native binary rather than
+a Java program: there is no loader, no heap size, and no Modrinth mods, and the app hides
+those options accordingly. Bedrock players connect over UDP on the server's own port
+(19132 by default), which the Connect view spells out next to your local IP.
 
 Keyboard shortcuts are listed under the in-app **Shortcuts** dialog.
 

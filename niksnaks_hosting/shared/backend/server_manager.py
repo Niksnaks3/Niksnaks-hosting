@@ -6,6 +6,7 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from niksnaks_hosting.shared.backend.bedrock_manager import BedrockManager, BedrockVersionOption
 from niksnaks_hosting.shared.backend.config_manager import ConfigManager
 from niksnaks_hosting.shared.backend.download_manager import DownloadManager
 from niksnaks_hosting.shared.backend.java_manager import JavaManager
@@ -15,14 +16,20 @@ from niksnaks_hosting.shared.backend.preferences_manager import PreferencesManag
 from niksnaks_hosting.shared.backend.server_process import ServerProcess
 from niksnaks_hosting.shared.core.events import EventEmitter
 from niksnaks_hosting.shared.utils.constants import (
+    BEDROCK_DEFAULT_PORT,
+    BEDROCK_WORLDS_DIR,
     CONFIG_FILE,
     DEFAULT_RAM_MB,
+    EDITION_BEDROCK,
+    EDITION_JAVA,
     LOADER_FABRIC,
     LOADER_FORGE,
     SERVERS_DIR,
     get_forge_full_version,
     get_required_java_version,
     get_loader_display_name,
+    is_bedrock,
+    normalize_edition,
     normalize_loader,
 )
 from niksnaks_hosting.shared.utils.migration import BACKUPS_DIR, LEGACY_BACKUPS_DIR
@@ -37,6 +44,8 @@ class ServerInfo:
         self.name: str = data.get("name", _("Unnamed Server"))
         self.mc_version: str = data.get("mc_version", "")
 
+        # Servers created before Bedrock support existed have no edition stored.
+        self.edition: str = normalize_edition(data.get("edition", EDITION_JAVA))
         self.loader_type: str = normalize_loader(data.get("loader_type", LOADER_FABRIC))
         self.loader_version: str = data.get("loader_version", "")
 
@@ -60,6 +69,7 @@ class ServerInfo:
             "id": self.id,
             "name": self.name,
             "mc_version": self.mc_version,
+            "edition": self.edition,
             "loader_type": self.loader_type,
             "loader_version": self.loader_version,
             "ram_mb": self.ram_mb,
@@ -79,6 +89,7 @@ class ServerManager(EventEmitter):
         self._mods_operation_counts: dict[str, int] = {}
         self.java_manager = JavaManager()
         self.download_manager = DownloadManager()
+        self.bedrock_manager = BedrockManager()
         self.playit_manager = PlayitManager()
         self.preferences = PreferencesManager()
         self._load()
@@ -118,6 +129,7 @@ class ServerManager(EventEmitter):
         ram_mb: int = DEFAULT_RAM_MB,
         java_version: int | None = None,
         loader_type: str = LOADER_FABRIC,
+        edition: str = EDITION_JAVA,
     ) -> ServerInfo:
 
         server_id = str(uuid.uuid4())
@@ -128,6 +140,7 @@ class ServerManager(EventEmitter):
                 "id": server_id,
                 "name": name,
                 "mc_version": mc_version,
+                "edition": normalize_edition(edition),
                 "loader_type": normalize_loader(loader_type),
                 "loader_version": loader_version,
                 "ram_mb": ram_mb,
@@ -212,6 +225,9 @@ class ServerManager(EventEmitter):
         info = self._servers.get(server_id)
         if not info:
             return False, _("Server not found")
+
+        if is_bedrock(info.edition):
+            return False, _("Use the Bedrock updater for Bedrock Edition servers")
 
         process = self._processes.get(server_id)
         if process and process.is_running:
@@ -369,6 +385,74 @@ class ServerManager(EventEmitter):
         if failed:
             detail += _(" {} compatible update(s) failed.").format(failed)
         return True, detail
+
+    def install_bedrock_server(
+        self,
+        server_id: str,
+        option: BedrockVersionOption,
+        progress_callback=None,
+        keep_existing_config: bool = False,
+    ) -> tuple[bool, str]:
+
+        info = self._servers.get(server_id)
+        if not info:
+            return False, _("Server not found")
+
+        ok, msg = self.bedrock_manager.install(
+            option,
+            info.server_dir,
+            progress_callback=progress_callback,
+            keep_existing_config=keep_existing_config,
+        )
+        if not ok:
+            return False, msg
+
+        info.mc_version = option.version
+        info.edition = EDITION_BEDROCK
+        self._save()
+        self.emit_on_main_thread("server-changed", server_id)
+        return True, msg
+
+    def update_bedrock_server(
+        self,
+        server_id: str,
+        option: BedrockVersionOption,
+        progress_callback=None,
+    ) -> tuple[bool, str]:
+
+        info = self._servers.get(server_id)
+        if not info:
+            return False, _("Server not found")
+
+        if not is_bedrock(info.edition):
+            return False, _("This server is not a Bedrock Edition server")
+
+        process = self._processes.get(server_id)
+        if process and process.is_running:
+            return False, _("Cannot update version while server is running")
+
+        def progress(frac: float, msg: str) -> None:
+            if progress_callback:
+                progress_callback(frac, msg)
+
+        progress(0.02, _("Creating full backup"))
+        backup_ok, backup_msg = self.create_full_backup(server_id)
+        if not backup_ok:
+            return False, _("Could not create full backup before updating: {}").format(backup_msg)
+
+        # Worlds live under worlds/ and are untouched by the package; server.properties,
+        # allowlist.json and permissions.json are kept so settings survive the update.
+        ok, msg = self.install_bedrock_server(
+            server_id,
+            option,
+            progress_callback=lambda frac, text: progress(0.05 + frac * 0.95, text),
+            keep_existing_config=True,
+        )
+        if not ok:
+            return False, msg
+
+        progress(1.0, _("Server runtime updated"))
+        return True, _("Updated to Bedrock {}.").format(option.version)
 
     def _json_file(self, path: Path) -> dict:
         try:
@@ -1043,23 +1127,27 @@ class ServerManager(EventEmitter):
             return None
 
         if server_id not in self._processes:
-            java_path = self.java_manager.get_java_path(info.java_version)
-            if not java_path:
-                java_path = shutil.which("java")
+            server_is_bedrock = is_bedrock(info.edition)
+
+            java_path = ""
+            if not server_is_bedrock:
+                java_path = self.java_manager.get_java_path(info.java_version) or shutil.which("java") or "java"
 
             config = self.get_config(server_id)
-            max_players = 20
+            default_max_players = 10 if server_is_bedrock else 20
+            max_players = default_max_players
             if config:
                 config.load()
-                max_players = config.get_int("max-players", 20)
+                max_players = config.get_int("max-players", default_max_players)
 
             self._processes[server_id] = ServerProcess(
                 server_dir=str(info.server_dir),
-                java_path=java_path or "java",
+                java_path=java_path,
                 ram_mb=info.ram_mb,
                 max_players=max_players,
                 jvm_args=info.jvm_args,
                 loader_type=info.loader_type,
+                edition=info.edition,
             )
 
         return self._processes[server_id]
@@ -1144,7 +1232,7 @@ class ServerManager(EventEmitter):
             port += 1
         return port
 
-    def set_java_port(self, server_id: str, port: int) -> None:
+    def set_server_port(self, server_id: str, port: int) -> None:
         info = self._servers.get(server_id)
         if not info:
             return
@@ -1157,12 +1245,23 @@ class ServerManager(EventEmitter):
     def get_bedrock_port(self, server_id: str) -> int:
         info = self._servers.get(server_id)
         if not info:
-            return 19132
+            return BEDROCK_DEFAULT_PORT
+        # A Bedrock Edition server listens on this port itself; on a Java server the
+        # Bedrock traffic goes to Geyser, which uses its own configured port.
+        if is_bedrock(info.edition):
+            try:
+                server_cfg = self.get_config(server_id)
+                if server_cfg:
+                    server_cfg.load()
+                    return server_cfg.get_int("server-port", BEDROCK_DEFAULT_PORT)
+            except Exception:
+                pass
+            return BEDROCK_DEFAULT_PORT
         try:
             cfg = load_playit_config(info.server_dir)
-            return int(cfg.get("bedrock_port", 19132))
+            return int(cfg.get("bedrock_port", BEDROCK_DEFAULT_PORT))
         except Exception:
-            return 19132
+            return BEDROCK_DEFAULT_PORT
 
     def get_voicechat_port(self, server_id: str) -> int:
         info = self._servers.get(server_id)
@@ -1359,6 +1458,7 @@ class ServerManager(EventEmitter):
             return False
 
         markers = (
+            "db",  # Bedrock keeps every dimension in one LevelDB
             "region",
             "data",
             "playerdata",
@@ -1374,21 +1474,34 @@ class ServerManager(EventEmitter):
         )
         return any((item / marker).exists() for marker in markers)
 
+    def _pick_world_dir(self, container: Path, level_name: str, preferred_name: str) -> list[Path]:
+        preferred = container / preferred_name
+        if self._is_world_dir(preferred, level_name):
+            return [preferred]
+
+        try:
+            worlds = [item for item in container.iterdir() if self._is_world_dir(item, level_name)]
+        except OSError:
+            return []
+        if not worlds:
+            return []
+
+        return [sorted(worlds, key=lambda p: p.name.lower())[0]]
+
     def _iter_world_dirs(self, server_root: Path) -> list[Path]:
         if not server_root.is_dir():
             return []
 
         level_name = self._configured_level_name(server_root)
-        preferred = server_root / "world"
-        if self._is_world_dir(preferred, level_name):
-            return [preferred]
 
-        worlds = [item for item in server_root.iterdir() if self._is_world_dir(item, level_name)]
-        if not worlds:
-            return []
+        # Bedrock keeps its worlds one level down, in worlds/<level-name>/.
+        bedrock_root = server_root / BEDROCK_WORLDS_DIR
+        if bedrock_root.is_dir():
+            found = self._pick_world_dir(bedrock_root, level_name, level_name)
+            if found:
+                return found
 
-        worlds = sorted(worlds, key=lambda p: p.name.lower())
-        return [worlds[0]]
+        return self._pick_world_dir(server_root, level_name, "world")
 
     def _unique_world_destination(self, server_root: Path, name: str) -> Path:
         safe_name = Path(name).name.strip() or "world"
@@ -1414,11 +1527,15 @@ class ServerManager(EventEmitter):
             return False, _("Server is running")
 
         root = info.server_dir
-        world_dir = root / "world"
+        bedrock = is_bedrock(info.edition)
+        level_name = self._configured_level_name(root)
+        # Bedrock regenerates worlds/<level-name>/ on next boot and keeps its own name.
+        container = root / BEDROCK_WORLDS_DIR if bedrock else root
+        world_dir = container / (level_name or "Bedrock level") if bedrock else root / "world"
 
         try:
-            level_name = self._configured_level_name(root)
-            for item in root.iterdir():
+            container.mkdir(parents=True, exist_ok=True)
+            for item in container.iterdir():
                 if not self._is_world_dir(item, level_name):
                     continue
                 if item.resolve() == world_dir.resolve():
@@ -1432,9 +1549,10 @@ class ServerManager(EventEmitter):
             world_dir.mkdir(parents=True, exist_ok=True)
             cfg = ConfigManager(root)
             cfg.load()
-            cfg.set_value("level-name", "world")
+            if not bedrock:
+                cfg.set_value("level-name", "world")
             cfg.set_value("level-seed", seed.strip())
-            if level_type:
+            if level_type and not bedrock:
                 cfg.set_value("level-type", level_type)
             cfg.save()
         except Exception as e:
@@ -1459,10 +1577,13 @@ class ServerManager(EventEmitter):
             return False, _("Selected folder does not look like a Minecraft world")
 
         root = info.server_dir
-        dst = root / "world"
+        bedrock = is_bedrock(info.edition)
+        level_name = self._configured_level_name(root)
+        container = root / BEDROCK_WORLDS_DIR if bedrock else root
+        dst = container / (level_name or "Bedrock level") if bedrock else root / "world"
         try:
-            level_name = self._configured_level_name(root)
-            for item in root.iterdir():
+            container.mkdir(parents=True, exist_ok=True)
+            for item in container.iterdir():
                 if not self._is_world_dir(item, level_name):
                     continue
                 if item.resolve() == dst.resolve():
@@ -1473,20 +1594,22 @@ class ServerManager(EventEmitter):
             if dst.exists():
                 shutil.rmtree(dst, ignore_errors=True)
 
-            from niksnaks_hosting.shared.utils.nbt_utils import get_world_info
+            # Bedrock worlds carry their settings inside the level, not in server.properties,
+            # and their level.dat is not the Java NBT format this reader understands.
+            seed, wtype = ("", "")
+            if not bedrock:
+                from niksnaks_hosting.shared.utils.nbt_utils import get_world_info
 
-            seed, wtype = get_world_info(src)
+                seed, wtype = get_world_info(src)
 
             shutil.copytree(src, dst)
             cfg = ConfigManager(root)
             cfg.load()
-            cfg.set_value("level-name", "world")
-            if seed:
-                cfg.set_value("level-seed", seed)
-            else:
-                cfg.set_value("level-seed", "")
-            if wtype:
-                cfg.set_value("level-type", wtype)
+            if not bedrock:
+                cfg.set_value("level-name", "world")
+                cfg.set_value("level-seed", seed or "")
+                if wtype:
+                    cfg.set_value("level-type", wtype)
             cfg.save()
         except Exception as e:
             if dst.exists():
@@ -1682,8 +1805,12 @@ class ServerManager(EventEmitter):
                     if not extracted_worlds:
                         return False, _("This backup does not contain any world data.")
 
+                    bedrock = is_bedrock(info.edition)
+                    container = root / BEDROCK_WORLDS_DIR if bedrock else root
+                    container.mkdir(parents=True, exist_ok=True)
+
                     level_name = "world"
-                    for item in root.iterdir():
+                    for item in container.iterdir():
                         if not item.is_dir():
                             continue
                         if (
@@ -1710,7 +1837,8 @@ class ServerManager(EventEmitter):
                             shutil.rmtree(item, ignore_errors=True)
 
                     for item in extracted_worlds:
-                        dst = root / "world"
+                        # Bedrock worlds keep their own folder name; Java's is always "world".
+                        dst = container / item.name if bedrock else root / "world"
                         if dst.is_dir():
                             shutil.rmtree(dst, ignore_errors=True)
                         shutil.copytree(item, dst, dirs_exist_ok=True)

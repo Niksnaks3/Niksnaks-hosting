@@ -15,6 +15,7 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gio, Gtk
 
+from niksnaks_hosting.shared.utils.constants import BEDROCK_WORLDS_DIR
 from niksnaks_hosting.shared.utils.nbt_utils import get_world_seed as _world_seed
 from niksnaks_hosting.shared.utils.subprocess_utils import hidden_subprocess_kwargs
 
@@ -115,24 +116,38 @@ def _world_dirs(server_root: Path) -> list[Path]:
         )
         return any((item / marker).exists() for marker in markers)
 
-    out = []
+    def _pick(container: Path, preferred_name: str) -> list[Path]:
+        preferred = container / preferred_name
+        if _is_world_dir(preferred, level_name):
+            return [preferred]
+        try:
+            found = [item for item in container.iterdir() if _is_world_dir(item, level_name)]
+        except OSError:
+            return []
+        if not found:
+            return []
+        return [sorted(found, key=lambda p: p.name.lower())[0]]
+
     if not server_root.is_dir():
-        return out
+        return []
 
     level_name = _configured_level_name(server_root)
-    preferred = server_root / "world"
-    if _is_world_dir(preferred, level_name):
-        return [preferred]
 
-    for item in server_root.iterdir():
-        if _is_world_dir(item, level_name):
-            out.append(item)
-    if not out:
-        return out
-    return [sorted(out, key=lambda p: p.name.lower())[0]]
+    # Bedrock keeps its worlds one level down, in worlds/<level-name>/.
+    bedrock_root = server_root / BEDROCK_WORLDS_DIR
+    if bedrock_root.is_dir():
+        found = _pick(bedrock_root, level_name)
+        if found:
+            return found
+
+    return _pick(server_root, "world")
 
 def _world_dimension_dirs(world_dir: Path) -> list[tuple[str, Path]]:
     dims: list[tuple[str, Path]] = []
+
+    # Bedrock stores every dimension in a single LevelDB, so the world folder is the only entry.
+    if (world_dir / "db").is_dir():
+        return [("Overworld", world_dir)]
 
     if (world_dir / "region").is_dir() or (world_dir / "entities").is_dir():
         dims.append(("Overworld", world_dir))

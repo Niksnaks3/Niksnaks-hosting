@@ -15,6 +15,7 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Adw, GLib, Gtk
 
 from niksnaks_hosting.shared.backend.server_manager import ServerInfo, ServerManager
+from niksnaks_hosting.shared.utils.constants import is_bedrock
 
 from .mixins import BackupsMixin, ModrinthMixin, ModsMixin, PlayersMixin, WorldsMixin
 from .utils import *
@@ -151,6 +152,12 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, W
         self._server_manager = server_manager
         self._worlds_snapshot = tuple()
         self._disabled_snapshot = tuple()
+
+        # Bedrock uses add-ons (behaviour/resource packs), not Java mods or datapacks,
+        # and Modrinth does not serve Bedrock content.
+        if self._mods_group:
+            self._mods_group.set_visible(not is_bedrock(server_info.edition))
+
         self._refresh_backups_row_subtitle()
         self._rebuild_lists()
 

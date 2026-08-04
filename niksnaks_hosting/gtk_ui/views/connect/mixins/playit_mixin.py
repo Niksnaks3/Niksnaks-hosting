@@ -14,7 +14,13 @@ from gi.repository import Adw, Gdk, GLib
 from niksnaks_hosting.gtk_ui.dialogs.manage_playit_tunnel import ManagePlayitTunnelDialog
 from niksnaks_hosting.gtk_ui.dialogs.playit_setup import PlayitSetupDialog
 from niksnaks_hosting.shared.backend.playit_config import load_playit_config, save_playit_config
-from niksnaks_hosting.shared.utils.constants import LOADER_FABRIC, get_loader_display_name, normalize_loader
+from niksnaks_hosting.shared.utils.constants import (
+    BEDROCK_DEFAULT_PORT,
+    LOADER_FABRIC,
+    get_loader_display_name,
+    is_bedrock,
+    normalize_loader,
+)
 
 PLAYIT_DASHBOARD_URL = "https://playit.gg/account/tunnels"
 
@@ -25,6 +31,21 @@ class PlayitMixin:
         if self._server_info:
             return normalize_loader(self._server_info.loader_type)
         return LOADER_FABRIC
+
+    def _bedrock_tunnel_port(self) -> int:
+        """UDP port the Bedrock tunnel should point at.
+
+        A Bedrock Edition server listens on its own ``server-port``; on a Java server the
+        Bedrock traffic is handled by Geyser, which listens on a separate configured port.
+        """
+        if self._is_bedrock_server() and self._server_manager:
+            return self._server_manager.playit_manager._read_server_port(str(self._server_info.server_dir))
+        return int(self._cfg.get("bedrock_port", BEDROCK_DEFAULT_PORT))
+
+    def _other_bedrock_port(self, info, cfg: dict) -> int:
+        if is_bedrock(info.edition):
+            return self._server_manager.playit_manager._read_server_port(str(info.server_dir))
+        return int(cfg.get("bedrock_port", BEDROCK_DEFAULT_PORT))
 
     def _load_server_config(self):
         root = self._server_dir()
@@ -94,7 +115,7 @@ class PlayitMixin:
                 if endpoint_key == "java_endpoint":
                     other_port = self._server_manager.playit_manager._read_server_port(str(info.server_dir))
                 elif endpoint_key == "bedrock_endpoint":
-                    other_port = int(cfg.get("bedrock_port", 19132))
+                    other_port = self._other_bedrock_port(info, cfg)
                 elif endpoint_key == "voicechat_endpoint":
                     other_port = int(cfg.get("voicechat_port", 24454))
                 else:
@@ -134,7 +155,7 @@ class PlayitMixin:
                 if endpoint_key == "java_endpoint":
                     other_port = self._server_manager.playit_manager._read_server_port(str(info.server_dir))
                 elif endpoint_key == "bedrock_endpoint":
-                    other_port = int(cfg.get("bedrock_port", 19132))
+                    other_port = self._other_bedrock_port(info, cfg)
                 elif endpoint_key == "voicechat_endpoint":
                     other_port = int(cfg.get("voicechat_port", 24454))
                 else:
@@ -589,7 +610,7 @@ class PlayitMixin:
                 if new_port == server_port:
                     return
                 old_port = server_port
-                self._server_manager.set_java_port(server_id, new_port)
+                self._server_manager.set_server_port(server_id, new_port)
                 self._toast(_("Java port changed to {}").format(new_port))
                 self._java_tunnel_in_progress = True
                 self._refresh_status_row()
@@ -657,7 +678,7 @@ class PlayitMixin:
             self._refresh_status_row()
 
             def run():
-                br_port = int(self._cfg.get("bedrock_port", 19132))
+                br_port = self._bedrock_tunnel_port()
                 if had_bedrock_tunnel:
                     ok, msg, endpoint = self._server_manager.playit_manager.regenerate_bedrock_tunnel(
                         server_id,
@@ -691,16 +712,20 @@ class PlayitMixin:
             threading.Thread(target=run, daemon=True).start()
 
         if had_bedrock_tunnel:
-            br_port = int(self._cfg.get("bedrock_port", 19132))
+            br_port = self._bedrock_tunnel_port()
 
             def on_bedrock_port_changed(_dialog, new_port):
                 if new_port == br_port:
                     return
                 old_port = br_port
-                self._server_manager.set_bedrock_port(server_id, new_port)
-                self._cfg["bedrock_port"] = new_port
-                self._save_server_config()
-                self._server_manager.playit_manager.configure_geyser_mod(server_dir, new_port)
+                if self._is_bedrock_server():
+                    # The server itself listens on this port, so move the server, not Geyser.
+                    self._server_manager.set_server_port(server_id, new_port)
+                else:
+                    self._server_manager.set_bedrock_port(server_id, new_port)
+                    self._cfg["bedrock_port"] = new_port
+                    self._save_server_config()
+                    self._server_manager.playit_manager.configure_geyser_mod(server_dir, new_port)
                 self._toast(_("Bedrock port changed to {}").format(new_port))
                 self._bedrock_in_progress = True
                 self._refresh_status_row()
@@ -738,7 +763,11 @@ class PlayitMixin:
             dialog.present(self.get_root())
             return
 
-        if self._has_mod_installed(server_dir, "geyser") and self._has_mod_installed(server_dir, "floodgate"):
+        # Geyser/Floodgate bridge Bedrock clients into a Java server; a Bedrock Edition
+        # server already speaks the protocol, so the tunnel points straight at it.
+        if self._is_bedrock_server():
+            start_operation()
+        elif self._has_mod_installed(server_dir, "geyser") and self._has_mod_installed(server_dir, "floodgate"):
             start_operation()
         else:
             self._confirm_required_mod_install(

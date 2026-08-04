@@ -14,11 +14,16 @@ from niksnaks_hosting.gtk_ui.loader_version_row import (
     set_loader_versions,
     set_loader_versions_loading,
 )
+from niksnaks_hosting.shared.backend.bedrock_manager import BedrockVersionOption
 from niksnaks_hosting.shared.backend.download_manager import LoaderVersionOption
 from niksnaks_hosting.shared.backend.server_manager import ServerManager
 from niksnaks_hosting.shared.utils.constants import (
+    BEDROCK_DEFAULT_SERVER_PROPERTIES,
+    BEDROCK_GAMEMODES,
     DEFAULT_SERVER_PROPERTIES,
     DIFFICULTIES,
+    EDITION_BEDROCK,
+    EDITION_JAVA,
     GAMEMODES,
     LEVEL_TYPE_NAMES,
     LEVEL_TYPES,
@@ -26,7 +31,9 @@ from niksnaks_hosting.shared.utils.constants import (
     LOADER_FORGE,
     MAX_RAM_MB,
     MIN_RAM_MB,
+    SUPPORTED_EDITIONS,
     SUPPORTED_LOADERS,
+    get_edition_display_name,
     get_loader_display_name,
     get_required_java_version,
     normalize_loader,
@@ -54,6 +61,8 @@ FORGE_OPTIMISATION_MODS = [
 
 LOADER_LABELS = [get_loader_display_name(loader) for loader in SUPPORTED_LOADERS]
 
+EDITION_LABELS = [get_edition_display_name(edition) for edition in SUPPORTED_EDITIONS]
+
 DIFFICULTY_MODES = [*DIFFICULTIES, "hardcore"]
 
 COMMON_JAVA_VERSIONS = [8, 11, 16, 17, 21, 25]
@@ -68,6 +77,7 @@ class CreateServerDialog(Adw.Dialog):
         self._server_manager = server_manager
         self._game_versions: list[str] = []
         self._loader_options: list[LoaderVersionOption] = []
+        self._bedrock_options: list[BedrockVersionOption] = []
         self._fetch_gen: int = 0
         self._loader_fetch_gen: int = 0
         self._loader_fetch_key: tuple[str, str] = ("", "")
@@ -113,6 +123,7 @@ class CreateServerDialog(Adw.Dialog):
         self._toolbar_view.set_content(self._stack)
         self.set_child(self._toolbar_view)
 
+        self._apply_edition_visibility()
         self._fetch_versions()
 
     def _build_details_page(self) -> Gtk.Widget:
@@ -232,6 +243,14 @@ class CreateServerDialog(Adw.Dialog):
             title=_("Runtime"),
         )
 
+        self._edition_row = Adw.ComboRow(
+            title=_("Edition"),
+            subtitle=_("Java Edition supports mods; Bedrock is the console and mobile edition"),
+            model=Gtk.StringList.new(EDITION_LABELS),
+        )
+        self._edition_row.connect("notify::selected", self._on_edition_changed)
+        version_group.add(self._edition_row)
+
         self._loader_row = Adw.ComboRow(
             title=_("Mod loader"),
             model=Gtk.StringList.new(LOADER_LABELS),
@@ -262,9 +281,10 @@ class CreateServerDialog(Adw.Dialog):
 
         page.add(version_group)
 
-        resources_group = Adw.PreferencesGroup(
+        self._resources_group = Adw.PreferencesGroup(
             title=_("Resources"),
         )
+        resources_group = self._resources_group
 
         ram_adj = Gtk.Adjustment(
             value=self._server_manager.preferences.default_ram_mb,
@@ -282,9 +302,10 @@ class CreateServerDialog(Adw.Dialog):
 
         page.add(resources_group)
 
-        mods_group = Adw.PreferencesGroup(
+        self._mods_group = Adw.PreferencesGroup(
             title=_("Optional setup"),
         )
+        mods_group = self._mods_group
         self._optimise_row = Adw.SwitchRow(
             title=_("Install server-optimising mods"),
             subtitle=_("Installs compatible performance mods"),
@@ -332,13 +353,104 @@ class CreateServerDialog(Adw.Dialog):
             return SUPPORTED_LOADERS[idx]
         return LOADER_FABRIC
 
+    def _selected_edition(self) -> str:
+        idx = self._edition_row.get_selected()
+        if 0 <= idx < len(SUPPORTED_EDITIONS):
+            return SUPPORTED_EDITIONS[idx]
+        return EDITION_JAVA
+
+    def _is_bedrock(self) -> bool:
+        return self._selected_edition() == EDITION_BEDROCK
+
     def _selected_loader_version(self) -> str:
         return selected_loader_version(self._loader_version_row, self._loader_options)
+
+    def _on_edition_changed(self, *_args):
+        self._game_versions = []
+        self._loader_options = []
+        self._bedrock_options = []
+        self._fetch_gen += 1
+        self._loader_fetch_gen += 1
+        self._loader_fetch_key = ("", "")
+
+        self._apply_edition_visibility()
+        self._mc_version_row.set_model(Gtk.StringList.new([_("Loading...")]))
+        set_loader_version_message(self._loader_version_row, _("Loading..."), _("Select a Minecraft version"))
+        self._fetch_versions()
+        self._validate()
+
+    def _apply_edition_visibility(self) -> None:
+        bedrock = self._is_bedrock()
+
+        # Bedrock Dedicated Server is a native binary: no mod loader and no Java runtime.
+        self._loader_row.set_visible(not bedrock)
+        self._loader_version_row.set_visible(not bedrock)
+        self._java_version_row.set_visible(not bedrock)
+        self._mods_group.set_visible(not bedrock)
+
+        # It has no heap either, so the same number becomes an OS-enforced ceiling.
+        self._ram_row.set_title(_("Memory Limit (MB)") if bedrock else _("Allocated RAM (MB)"))
+        self._ram_row.set_subtitle(
+            _("Hard ceiling enforced by the system; the server stops if it is exceeded") if bedrock else ""
+        )
+
+        # Bedrock has no level-type, and its worlds use a different on-disk format.
+        self._level_type_row.set_visible(not bedrock)
+        self._world_import_row.set_visible(not bedrock)
+
+        self._mc_version_row.set_title(_("Bedrock version") if bedrock else _("Minecraft version"))
+
+        difficulties = list(DIFFICULTIES) if bedrock else list(DIFFICULTY_MODES)
+        gamemodes = list(BEDROCK_GAMEMODES) if bedrock else list(GAMEMODES)
+        self._set_world_default_options(difficulties, gamemodes)
+
+    def _set_world_default_options(self, difficulties: list[str], gamemodes: list[str]) -> None:
+        previous_difficulty = (
+            self._difficulty_values[self._difficulty_row.get_selected()]
+            if self._difficulty_row.get_selected() < len(self._difficulty_values)
+            else ""
+        )
+        previous_gamemode = (
+            self._gamemode_values[self._gamemode_row.get_selected()]
+            if self._gamemode_row.get_selected() < len(self._gamemode_values)
+            else ""
+        )
+
+        self._difficulty_values = difficulties
+        labels = [_("Hardcore") if value == "hardcore" else value.title() for value in difficulties]
+        self._difficulty_row.set_model(Gtk.StringList.new(labels))
+        if previous_difficulty in difficulties:
+            self._difficulty_row.set_selected(difficulties.index(previous_difficulty))
+        elif "easy" in difficulties:
+            self._difficulty_row.set_selected(difficulties.index("easy"))
+
+        self._gamemode_values = gamemodes
+        self._gamemode_row.set_model(Gtk.StringList.new([value.replace("-", " ").title() for value in gamemodes]))
+        if previous_gamemode in gamemodes:
+            self._gamemode_row.set_selected(gamemodes.index(previous_gamemode))
+        elif "survival" in gamemodes:
+            self._gamemode_row.set_selected(gamemodes.index("survival"))
 
     def _fetch_versions(self):
         self._mc_version_row.set_sensitive(False)
         self._fetch_gen += 1
         gen = self._fetch_gen
+
+        if self._is_bedrock():
+
+            def on_bedrock_versions(options):
+                def apply():
+                    if gen != self._fetch_gen:
+                        return False
+                    self._bedrock_options = options
+                    self._game_versions = [option.version for option in options]
+                    self._populate_versions()
+                    return False
+
+                GLib.idle_add(apply)
+
+            self._server_manager.bedrock_manager.fetch_versions_async(on_bedrock_versions)
+            return
 
         def on_versions(game_vers):
             def apply():
@@ -367,15 +479,20 @@ class CreateServerDialog(Adw.Dialog):
 
     def _populate_versions(self):
         if self._game_versions:
-            self._mc_version_row.set_model(Gtk.StringList.new(self._game_versions))
+            if self._is_bedrock():
+                labels = [option.label for option in self._bedrock_options]
+            else:
+                labels = list(self._game_versions)
+            self._mc_version_row.set_model(Gtk.StringList.new(labels))
             self._mc_version_row.set_sensitive(True)
             self._mc_version_row.set_selected(0)
             self._on_mc_version_changed(self._mc_version_row, None)
         else:
             self._mc_version_row.set_model(Gtk.StringList.new([_("No versions found")]))
-            set_loader_version_message(
-                self._loader_version_row, _("No versions found"), _("Select a Minecraft version")
-            )
+            if not self._is_bedrock():
+                set_loader_version_message(
+                    self._loader_version_row, _("No versions found"), _("Select a Minecraft version")
+                )
 
         self._validate()
 
@@ -383,11 +500,18 @@ class CreateServerDialog(Adw.Dialog):
         idx = row.get_selected()
         if idx < len(self._game_versions):
             mc_ver = self._game_versions[idx]
-            java_ver = get_required_java_version(mc_ver)
-            self._select_java_version(java_ver)
-            self._load_loader_versions(mc_ver)
+            if not self._is_bedrock():
+                java_ver = get_required_java_version(mc_ver)
+                self._select_java_version(java_ver)
+                self._load_loader_versions(mc_ver)
 
         self._validate()
+
+    def _selected_bedrock_option(self) -> BedrockVersionOption | None:
+        idx = self._mc_version_row.get_selected()
+        if 0 <= idx < len(self._bedrock_options):
+            return self._bedrock_options[idx]
+        return None
 
     def _load_loader_versions(self, mc_version: str) -> None:
         loader = self._selected_loader()
@@ -539,7 +663,10 @@ class CreateServerDialog(Adw.Dialog):
 
     def _validate(self, *args):
         name = self._name_entry.get_text().strip()
-        has_versions = len(self._game_versions) > 0 and len(self._loader_options) > 0
+        if self._is_bedrock():
+            has_versions = len(self._bedrock_options) > 0
+        else:
+            has_versions = len(self._game_versions) > 0 and len(self._loader_options) > 0
         page = self._stack.get_visible_child_name()
 
         if page == "details":
@@ -578,9 +705,6 @@ class CreateServerDialog(Adw.Dialog):
         mc_idx = self._mc_version_row.get_selected()
         mc_version = self._game_versions[mc_idx] if mc_idx < len(self._game_versions) else ""
 
-        loader_version = self._selected_loader_version()
-        loader_type = self._selected_loader()
-        ram_mb = int(self._ram_row.get_value())
         seed = self._seed_entry.get_text().strip()
         difficulty_idx = self._difficulty_row.get_selected()
         difficulty = (
@@ -596,6 +720,34 @@ class CreateServerDialog(Adw.Dialog):
             if gamemode_idx < len(self._gamemode_values)
             else str(DEFAULT_SERVER_PROPERTIES.get("gamemode", "survival"))
         )
+
+        if self._is_bedrock():
+            option = self._selected_bedrock_option()
+            if not name or not option:
+                return
+
+            self._stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT)
+            self._stack.set_visible_child_name("progress")
+            self._create_btn.set_sensitive(False)
+
+            threading.Thread(
+                target=self._install_bedrock_thread,
+                args=(
+                    name,
+                    option,
+                    int(self._ram_row.get_value()),
+                    seed,
+                    difficulty_for_config,
+                    gamemode,
+                    self._icon_source_path,
+                ),
+                daemon=True,
+            ).start()
+            return
+
+        loader_version = self._selected_loader_version()
+        loader_type = self._selected_loader()
+        ram_mb = int(self._ram_row.get_value())
         level_type_idx = self._level_type_row.get_selected()
         level_type = (
             self._level_type_values[level_type_idx]
@@ -634,6 +786,54 @@ class CreateServerDialog(Adw.Dialog):
             daemon=True,
         )
         thread.start()
+
+    def _install_bedrock_thread(self, name, option, ram_mb, seed, difficulty, gamemode, icon_source_path):
+
+        try:
+            self._update_progress(0.05, _("Creating server..."), _("Bedrock {}").format(option.version))
+            server_info = self._server_manager.add_server(
+                name=name,
+                mc_version=option.version,
+                ram_mb=ram_mb,
+                edition=EDITION_BEDROCK,
+            )
+
+            self._update_progress(0.10, _("Downloading Bedrock server..."), _("Bedrock {}").format(option.version))
+            success, msg = self._server_manager.install_bedrock_server(
+                server_info.id,
+                option,
+                progress_callback=lambda frac, text: self._update_progress(0.10 + frac * 0.78, text, ""),
+            )
+            if not success:
+                self._show_error(msg)
+                return
+
+            self._update_progress(0.90, _("Applying server settings..."), "")
+            from niksnaks_hosting.shared.backend.config_manager import ConfigManager
+
+            config = ConfigManager(str(server_info.server_dir))
+            config.load()
+            for key, value in BEDROCK_DEFAULT_SERVER_PROPERTIES.items():
+                config.set_value(key, value)
+            config.set_value("server-name", name)
+            config.set_value("difficulty", difficulty)
+            config.set_value("gamemode", gamemode)
+            config.set_value("level-seed", seed)
+            config.save()
+
+            if icon_source_path:
+                self._update_progress(0.95, _("Applying server icon..."), "")
+                try:
+                    icon_output = server_info.server_dir / "icon.png"
+                    convert_to_png(icon_source_path, str(icon_output), size=128)
+                    self._server_manager.set_server_icon(server_info.id, str(icon_output))
+                except Exception:
+                    pass
+
+            self._show_success(server_info.id)
+
+        except Exception as e:
+            self._show_error(_("Unexpected error: {}").format(e))
 
     def _install_thread(
         self,
@@ -782,7 +982,7 @@ class CreateServerDialog(Adw.Dialog):
             config.set_value("level-seed", seed)
             config.save()
             config.set_eula(True)
-            self._server_manager.set_java_port(server_info.id, 25565)
+            self._server_manager.set_server_port(server_info.id, 25565)
 
             if world_import_source_path:
                 self._update_progress(0.90, _("Importing world folder..."), "")

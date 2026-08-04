@@ -10,6 +10,7 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Adw, Gtk
 
 from niksnaks_hosting.shared.backend.server_manager import ServerInfo, ServerManager
+from niksnaks_hosting.shared.utils.constants import is_bedrock
 
 PLAYIT_DASHBOARD_URL = "https://playit.gg/account/tunnels"
 
@@ -230,6 +231,7 @@ class ConnectView(Gtk.Box, LocalIpMixin, PlayersMixin, PlayitMixin):
         self._status_handler_id = playit.connect("status-changed", self._on_playit_status_changed)
         self._endpoint_handler_id = playit.connect("endpoint-changed", self._on_playit_endpoint_changed)
         self._manager_changed_id = self._server_manager.connect("server-changed", self._on_server_changed)
+        self._apply_edition_layout()
         self._refresh_local_ip_row()
         self._load_server_config()
         self._banner.set_revealed(False)
@@ -237,6 +239,25 @@ class ConnectView(Gtk.Box, LocalIpMixin, PlayersMixin, PlayitMixin):
         self._refresh_player_lists()
         self._refresh_mode()
         self._refresh_status_row()
+
+    def _apply_edition_layout(self) -> None:
+        bedrock = self._is_bedrock_server()
+
+        # A Bedrock Edition server has no Java port to tunnel, and Simple Voice Chat is a
+        # Java mod; only the Bedrock (UDP) tunnel applies.
+        self._tunnel_domain_row.set_visible(not bedrock)
+        self._voicechat_domain_row.set_visible(not bedrock)
+
+        # Bedrock names it the allow list, and ships no ban list at all.
+        for group in self._whitelist_groups:
+            group.set_title(_("Allow List") if bedrock else _("Whitelist"))
+        for row in self._whitelist_toggle_rows:
+            row.set_title(_("Allow list enabled") if bedrock else _("Whitelist enabled"))
+            row.set_subtitle(
+                _("Only players in the allow list can join") if bedrock else _("Only whitelisted players can join")
+            )
+        for group in self._banned_groups:
+            group.set_visible(not bedrock)
 
     def _on_server_changed(self, _manager, server_id):
         if not self._server_info or server_id != self._server_info.id:
@@ -249,13 +270,16 @@ class ConnectView(Gtk.Box, LocalIpMixin, PlayersMixin, PlayitMixin):
             return None
         return Path(self._server_info.server_dir)
 
+    def _is_bedrock_server(self) -> bool:
+        return bool(self._server_info and is_bedrock(self._server_info.edition))
+
     def _refresh_whitelist_status(self):
         enabled = False
         if self._server_manager and self._server_info:
             cfg = self._server_manager.get_config(self._server_info.id)
             if cfg:
                 cfg.load()
-                enabled = cfg.get_bool("white-list", False)
+                enabled = cfg.get_bool(self._whitelist_property(), False)
 
         self._suppress_whitelist_toggle = True
         for row in self._whitelist_toggle_rows:
@@ -271,7 +295,7 @@ class ConnectView(Gtk.Box, LocalIpMixin, PlayersMixin, PlayitMixin):
         cfg = self._server_manager.get_config(self._server_info.id)
         if cfg:
             cfg.load()
-            cfg.set_value("white-list", row.get_active())
+            cfg.set_value(self._whitelist_property(), row.get_active())
             cfg.save()
 
         process = self._server_manager.get_process(self._server_info.id)

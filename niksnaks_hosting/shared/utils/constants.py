@@ -75,6 +75,38 @@ def normalize_loader(value: str | None) -> str:
 def get_loader_display_name(value: str | None) -> str:
     return LOADER_DISPLAY_NAMES[normalize_loader(value)]
 
+EDITION_JAVA = "java"
+EDITION_BEDROCK = "bedrock"
+SUPPORTED_EDITIONS = [EDITION_JAVA, EDITION_BEDROCK]
+EDITION_DISPLAY_NAMES = {
+    EDITION_JAVA: "Java Edition",
+    EDITION_BEDROCK: "Bedrock Edition",
+}
+
+def normalize_edition(value: str | None) -> str:
+    edition = str(value or "").strip().lower()
+    return edition if edition in SUPPORTED_EDITIONS else EDITION_JAVA
+
+def get_edition_display_name(value: str | None) -> str:
+    return EDITION_DISPLAY_NAMES[normalize_edition(value)]
+
+def is_bedrock(value: str | None) -> bool:
+    return normalize_edition(value) == EDITION_BEDROCK
+
+BEDROCK_DOWNLOAD_LINKS_URL = "https://net-secondary.web.minecraft-services.net/api/v1.0/download/links"
+BEDROCK_DOWNLOAD_TYPES = {
+    "win32": ("serverBedrockWindows", "serverBedrockPreviewWindows"),
+    "darwin": ("serverBedrockLinux", "serverBedrockPreviewLinux"),
+    "linux": ("serverBedrockLinux", "serverBedrockPreviewLinux"),
+}
+BEDROCK_SERVER_BINARY = "bedrock_server.exe" if sys.platform == "win32" else "bedrock_server"
+BEDROCK_DEFAULT_PORT = 19132
+BEDROCK_DEFAULT_PORT_V6 = 19133
+BEDROCK_WORLDS_DIR = "worlds"
+
+def get_bedrock_download_types() -> tuple[str, str]:
+    return BEDROCK_DOWNLOAD_TYPES.get(sys.platform, BEDROCK_DOWNLOAD_TYPES["linux"])
+
 ADOPTIUM_API_BASE = "https://api.adoptium.net/v3/binary/latest"
 
 def get_adoptium_jre_download_info(java_version: int) -> tuple[str, str]:
@@ -167,6 +199,40 @@ DEFAULT_SERVER_PROPERTIES = {
 DIFFICULTIES = ["peaceful", "easy", "normal", "hard"]
 
 GAMEMODES = ["survival", "creative", "adventure", "spectator"]
+
+# Bedrock Dedicated Server ships its own server.properties; these are the values
+# Niksnaks-Hosting sets on a fresh install. Key names and accepted values differ
+# from Java Edition (no eula.txt, no level-type, UDP port 19132).
+BEDROCK_DEFAULT_SERVER_PROPERTIES = {
+    "server-name": "a Niksnaks-Hosting server",
+    "gamemode": "survival",
+    "force-gamemode": "false",
+    "difficulty": "easy",
+    "allow-cheats": "false",
+    "max-players": "10",
+    "online-mode": "true",
+    "allow-list": "false",
+    "server-port": str(BEDROCK_DEFAULT_PORT),
+    "server-portv6": str(BEDROCK_DEFAULT_PORT_V6),
+    "enable-lan-visibility": "true",
+    "view-distance": "32",
+    "tick-distance": "4",
+    "player-idle-timeout": "30",
+    "max-threads": "8",
+    "level-name": "Bedrock level",
+    "level-seed": "",
+    "default-player-permission-level": "member",
+    "texturepack-required": "false",
+    "disable-player-interaction": "false",
+    "disable-custom-skins": "false",
+    "chat-restriction": "None",
+}
+
+BEDROCK_GAMEMODES = ["survival", "creative", "adventure"]
+
+BEDROCK_PERMISSION_LEVELS = ["visitor", "member", "operator"]
+
+BEDROCK_CHAT_RESTRICTIONS = ["None", "Dropped", "Disabled"]
 
 LEVEL_TYPES = [
     "minecraft\\:normal",
