@@ -1,8 +1,10 @@
 import json
 import re
 import shutil
+import tempfile
 import uuid
 import zipfile
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -37,6 +39,39 @@ from niksnaks_hosting.shared.utils.migration import BACKUPS_DIR, LEGACY_BACKUPS_
 BACKUP_DIR_NAMES = (BACKUPS_DIR, LEGACY_BACKUPS_DIR)
 FULL_BACKUP_PREFIXES = ("niksnaks-hosting-full-backup-", "hosty-full-backup-")
 FULL_BACKUP_NAME_RE = r"^(?:niksnaks-hosting|hosty)-full-backup-(.+)-\d{8}-\d{6}\.zip$"
+
+# Bedrock ships worlds as .mcworld; our own exports and backups are plain .zip.
+WORLD_ARCHIVE_SUFFIXES = (".mcworld", ".zip")
+
+# A backup may have been taken on the other platform, so recognise either binary.
+BEDROCK_BINARY_NAMES = ("bedrock_server", "bedrock_server.exe")
+
+def _safe_extract_zip(archive: Path, destination: Path) -> None:
+    """Extract *archive* into *destination*, refusing entries that escape it."""
+    destination.mkdir(parents=True, exist_ok=True)
+    root = destination.resolve()
+    with zipfile.ZipFile(archive, "r") as zf:
+        for entry in zf.infolist():
+            if not (root / entry.filename).resolve().is_relative_to(root):
+                raise ValueError(_("Archive contains invalid paths."))
+        zf.extractall(root)
+
+@dataclass(frozen=True)
+class FullBackupOption:
+    """A full backup on disk that a new server can be built from."""
+
+    path: Path
+    server_id: str
+    server_name: str
+    edition: str
+    mc_version: str
+    created_at: datetime
+
+    @property
+    def label(self) -> str:
+        stamp = self.created_at.strftime("%Y-%m-%d %H:%M")
+        version = self.mc_version or _("unknown version")
+        return f"{self.server_name} · {version} · {stamp}"
 
 class ServerInfo:
     def __init__(self, data: dict):
@@ -1561,7 +1596,24 @@ class ServerManager(EventEmitter):
         self.emit_on_main_thread("server-changed", server_id)
         return True, world_dir.name
 
+    def _find_world_root(self, extracted: Path) -> Path | None:
+        """Locate the world inside an extracted archive.
+
+        A .mcworld puts level.dat straight at the archive root, while our own world
+        zips nest it one level down under the world folder's name.
+        """
+        if self._is_importable_world_dir(extracted):
+            return extracted
+
+        try:
+            children = sorted((p for p in extracted.iterdir() if p.is_dir()), key=lambda p: p.name.lower())
+        except OSError:
+            return None
+
+        return next((child for child in children if self._is_importable_world_dir(child)), None)
+
     def import_world_folder(self, server_id: str, source: str | Path) -> tuple[bool, str]:
+        """Import a world from a folder or from a .mcworld/.zip archive."""
         info = self.get_server(server_id)
         if not info:
             return False, _("Server not found")
@@ -1571,11 +1623,30 @@ class ServerManager(EventEmitter):
             return False, _("Server is running")
 
         src = Path(source).expanduser()
+
+        if src.is_file():
+            if src.suffix.lower() not in WORLD_ARCHIVE_SUFFIXES:
+                return False, _("Select a .mcworld or .zip world archive")
+            with tempfile.TemporaryDirectory(prefix="niksnaks-hosting-world-") as td:
+                staged = Path(td) / "extracted"
+                try:
+                    _safe_extract_zip(src, staged)
+                except (OSError, ValueError, zipfile.BadZipFile) as e:
+                    return False, str(e)
+
+                world = self._find_world_root(staged)
+                if not world:
+                    return False, _("Archive does not contain a Minecraft world")
+                return self._replace_server_world(info, world)
+
         if not src.is_dir():
             return False, _("Selected world folder does not exist")
         if not self._is_importable_world_dir(src):
             return False, _("Selected folder does not look like a Minecraft world")
 
+        return self._replace_server_world(info, src)
+
+    def _replace_server_world(self, info: ServerInfo, src: Path) -> tuple[bool, str]:
         root = info.server_dir
         bedrock = is_bedrock(info.edition)
         level_name = self._configured_level_name(root)
@@ -1616,7 +1687,7 @@ class ServerManager(EventEmitter):
                 shutil.rmtree(dst, ignore_errors=True)
             return False, str(e)
 
-        self.emit_on_main_thread("server-changed", server_id)
+        self.emit_on_main_thread("server-changed", info.id)
         return True, dst.name
 
     def export_world_zip(self, server_id: str, world: str | Path, destination: str | Path) -> tuple[bool, str]:
@@ -1636,16 +1707,21 @@ class ServerManager(EventEmitter):
             return False, _("World folder is outside this server")
 
         dest = Path(destination).expanduser()
-        if dest.suffix.lower() != ".zip":
-            dest = dest.with_suffix(".zip")
+        if dest.suffix.lower() not in WORLD_ARCHIVE_SUFFIXES:
+            dest = dest.with_name(dest.name + ".zip")
         dest.parent.mkdir(parents=True, exist_ok=True)
+
+        # Minecraft only recognises a .mcworld whose contents sit at the archive
+        # root; our own .zip exports keep the wrapping world folder.
+        flat = dest.suffix.lower() == ".mcworld"
 
         try:
             with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
                 for item in world_path.rglob("*"):
                     if not item.is_file():
                         continue
-                    arc = Path(world_path.name) / item.relative_to(world_path)
+                    relative = item.relative_to(world_path)
+                    arc = relative if flat else Path(world_path.name) / relative
                     zf.write(item, arcname=str(arc).replace("\\", "/"))
         except Exception as e:
             return False, str(e)
@@ -1729,6 +1805,182 @@ class ServerManager(EventEmitter):
 
         self._cleanup_old_backups(server_id)
         return True, backup_path.name
+
+    def list_full_backups(self) -> list[FullBackupOption]:
+        """Every full backup across all servers, newest first."""
+        options: list[FullBackupOption] = []
+
+        for info in self._servers.values():
+            for dir_name in BACKUP_DIR_NAMES:
+                backups_dir = info.server_dir / dir_name
+                if not backups_dir.is_dir():
+                    continue
+                try:
+                    entries = list(backups_dir.iterdir())
+                except OSError:
+                    continue
+
+                for path in entries:
+                    if path.suffix.lower() != ".zip" or not path.name.startswith(FULL_BACKUP_PREFIXES):
+                        continue
+                    if not path.is_file():
+                        continue
+                    try:
+                        created = datetime.fromtimestamp(path.stat().st_mtime)
+                    except OSError:
+                        continue
+                    options.append(
+                        FullBackupOption(
+                            path=path,
+                            server_id=info.id,
+                            server_name=info.name,
+                            edition=info.edition,
+                            mc_version=self.backup_game_version(path) or info.mc_version,
+                            created_at=created,
+                        )
+                    )
+
+        return sorted(options, key=lambda option: option.created_at, reverse=True)
+
+    @staticmethod
+    def peek_backup_edition(archive: Path) -> str:
+        """Read a backup's archive index to see which edition it holds, without extracting."""
+        try:
+            with zipfile.ZipFile(archive, "r") as zf:
+                names = zf.namelist()
+        except (OSError, zipfile.BadZipFile):
+            return EDITION_JAVA
+
+        roots = {name.split("/", 1)[0] for name in names}
+        return EDITION_BEDROCK if roots.intersection(BEDROCK_BINARY_NAMES) else EDITION_JAVA
+
+    @staticmethod
+    def _detect_backup_layout(staged: Path, source: ServerInfo | None) -> tuple[str, str]:
+        """Work out (edition, loader) from the files a backup actually contains.
+
+        The archive is the only reliable witness for a backup browsed off disk; a
+        backup taken from a known server just confirms what that server already says.
+        """
+        from niksnaks_hosting.shared.backend.loader_launch import is_loader_installed
+
+        if any((staged / name).is_file() for name in BEDROCK_BINARY_NAMES):
+            return EDITION_BEDROCK, LOADER_FABRIC
+        if source and is_bedrock(source.edition):
+            return EDITION_BEDROCK, LOADER_FABRIC
+
+        if is_loader_installed(staged, LOADER_FORGE):
+            return EDITION_JAVA, LOADER_FORGE
+        if is_loader_installed(staged, LOADER_FABRIC):
+            return EDITION_JAVA, LOADER_FABRIC
+
+        return EDITION_JAVA, source.loader_type if source else LOADER_FABRIC
+
+    def _next_free_port(self, edition: str) -> int:
+        """Pick a listening port no existing server already claims.
+
+        A clone starts out on its source server's port, so without this the original
+        and the copy could never run side by side.
+        """
+        bedrock = is_bedrock(edition)
+        taken: set[int] = set()
+
+        for other in self._servers.values():
+            other_default = BEDROCK_DEFAULT_PORT if is_bedrock(other.edition) else 25565
+            try:
+                cfg = ConfigManager(other.server_dir)
+                cfg.load()
+                taken.add(cfg.get_int("server-port", other_default))
+            except Exception:
+                continue
+
+        # Bedrock also binds port + 1 for IPv6, so its ports have to move in pairs.
+        step = 2 if bedrock else 1
+        port = BEDROCK_DEFAULT_PORT if bedrock else 25565
+        while port in taken and port + step <= 65535:
+            port += step
+        return port
+
+    def create_server_from_backup(
+        self,
+        name: str,
+        archive: str | Path,
+        ram_mb: int = DEFAULT_RAM_MB,
+        source_server_id: str = "",
+        progress_callback=None,
+    ) -> tuple[bool, str, ServerInfo | None]:
+        """Build a brand-new server out of a full backup, with no download needed."""
+
+        def report(fraction: float, message: str) -> None:
+            if progress_callback:
+                progress_callback(fraction, message)
+
+        src = Path(archive).expanduser()
+        if not src.is_file():
+            return False, _("Backup file not found"), None
+        if src.suffix.lower() != ".zip":
+            return False, _("Select a full backup .zip archive"), None
+
+        source = self.get_server(source_server_id) if source_server_id else None
+
+        with tempfile.TemporaryDirectory(prefix="niksnaks-hosting-clone-") as td:
+            staged = Path(td) / "server"
+            report(0.05, _("Reading backup..."))
+            try:
+                _safe_extract_zip(src, staged)
+            except (OSError, ValueError, zipfile.BadZipFile) as e:
+                return False, str(e), None
+
+            if not any(staged.iterdir()):
+                return False, _("Backup archive is empty"), None
+
+            report(0.45, _("Detecting server type..."))
+            edition, loader_type = self._detect_backup_layout(staged, source)
+            mc_version = self.backup_game_version(src) or (source.mc_version if source else "")
+
+            info = self.add_server(
+                name=name,
+                mc_version=mc_version,
+                loader_version=source.loader_version if source else "",
+                ram_mb=ram_mb,
+                java_version=source.java_version if source else None,
+                loader_type=loader_type,
+                edition=edition,
+            )
+
+            report(0.55, _("Copying server files..."))
+            try:
+                for item in staged.iterdir():
+                    # The new server starts its own backup history rather than
+                    # inheriting the source server's archives.
+                    if item.name in BACKUP_DIR_NAMES:
+                        continue
+                    destination = info.server_dir / item.name
+                    if item.is_dir():
+                        shutil.copytree(item, destination, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(item, destination)
+            except Exception as e:
+                self.delete_server(info.id, delete_files=True)
+                return False, str(e), None
+
+        report(0.92, _("Applying server settings..."))
+        try:
+            cfg = ConfigManager(info.server_dir)
+            cfg.load()
+            port = self._next_free_port(edition)
+            cfg.set_value("server-port", port)
+            if is_bedrock(edition):
+                cfg.set_value("server-portv6", port + 1)
+                cfg.set_value("server-name", name)
+            cfg.save()
+            if not is_bedrock(edition):
+                cfg.set_eula(True)
+        except Exception as e:
+            self.delete_server(info.id, delete_files=True)
+            return False, str(e), None
+
+        self.emit_on_main_thread("server-changed", info.id)
+        return True, info.id, info
 
     def _cleanup_old_backups(self, server_id: str) -> None:
         if not self.preferences.auto_delete_old_backups:

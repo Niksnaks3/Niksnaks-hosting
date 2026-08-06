@@ -1,4 +1,5 @@
 from .backups_mixin import BackupsMixin
+from .curseforge_mixin import CurseForgeMixin
 from .modrinth_mixin import ModrinthMixin
 from .mods_mixin import ModsMixin
 from .players_mixin import PlayersMixin

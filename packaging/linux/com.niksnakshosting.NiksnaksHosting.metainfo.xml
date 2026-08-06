@@ -42,6 +42,18 @@
   </branding>
   <launchable type="desktop-id">com.niksnakshosting.NiksnaksHosting.desktop</launchable>
   <releases>
+    <release version="1.2" date="2026-08-06">
+      <description>
+        <p>CurseForge modpacks and world handling:</p>
+        <ul>
+          <li>Browse and install CurseForge modpacks from the Files tab, filtered to the server's Minecraft version and loader</li>
+          <li>Packs install from the author's server build when there is one, so client-only mods are left out</li>
+          <li>Create a new server from another server's full backup</li>
+          <li>Import and export Bedrock worlds as .mcworld, and import worlds from a .zip archive</li>
+          <li>Fixed a crash when importing a world</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.1" date="2026-08-04">
       <description>
         <p>Minecraft Bedrock Edition support:</p>

@@ -15,12 +15,12 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Adw, GLib, Gtk
 
 from niksnaks_hosting.shared.backend.server_manager import ServerInfo, ServerManager
-from niksnaks_hosting.shared.utils.constants import is_bedrock
+from niksnaks_hosting.shared.utils.constants import get_loader_display_name, is_bedrock
 
-from .mixins import BackupsMixin, ModrinthMixin, ModsMixin, PlayersMixin, WorldsMixin
+from .mixins import BackupsMixin, CurseForgeMixin, ModrinthMixin, ModsMixin, PlayersMixin, WorldsMixin
 from .utils import *
 
-class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, WorldsMixin):
+class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, CurseForgeMixin, WorldsMixin):
     def __init__(self):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.set_hexpand(True)
@@ -30,6 +30,9 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, W
         self._push_fullscreen_page_cb = None
         self._modrinth_page = None
         self._modrinth_header = None
+        self._curseforge_page = None
+        self._curseforge_header = None
+        self._curseforge_row: Adw.ActionRow | None = None
 
         self._worlds_group: Adw.PreferencesGroup | None = None
         self._mods_group: Adw.PreferencesGroup | None = None
@@ -115,6 +118,16 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, W
         modrinth_row.connect("activated", self._push_modrinth_page)
         self._mods_group.add(modrinth_row)
 
+        curseforge_row = Adw.ActionRow(
+            title=_("CurseForge"),
+            subtitle=_("Modpacks for this server"),
+        )
+        curseforge_row.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
+        curseforge_row.set_activatable(True)
+        curseforge_row.connect("activated", self._push_curseforge_page)
+        self._curseforge_row = curseforge_row
+        self._mods_group.add(curseforge_row)
+
         check_updates_row = Adw.ActionRow(
             title=_("Check for updates"),
         )
@@ -157,6 +170,15 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, W
         # and Modrinth does not serve Bedrock content.
         if self._mods_group:
             self._mods_group.set_visible(not is_bedrock(server_info.edition))
+
+        # The browser only ever shows packs this server can actually run, so say so up front.
+        if self._curseforge_row:
+            loader_name = get_loader_display_name(server_info.loader_type)
+            self._curseforge_row.set_subtitle(
+                _("Modpacks for Minecraft {} on {}").format(server_info.mc_version, loader_name)
+                if server_info.mc_version
+                else _("Modpacks for {}").format(loader_name)
+            )
 
         self._refresh_backups_row_subtitle()
         self._rebuild_lists()
@@ -267,7 +289,8 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, W
         mods_dir.mkdir(parents=True, exist_ok=True)
         jars = sorted(mods_dir.glob("*.jar"), key=lambda p: p.name.lower())
         entries = self._modpack_entries()
-        managed_set = set(self._modpack_managed_mod_map().keys())
+        curseforge_entries = self._curseforge_entries()
+        managed_set = set(self._modpack_managed_mod_map().keys()) | self._curseforge_managed_mod_names()
 
         if self._mods_expander:
             for project_id, entry in sorted(
@@ -275,6 +298,14 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, W
                 key=lambda item: (str(item[1].get("title", "")).strip() or item[0]).lower(),
             ):
                 row = self._make_modpack_row(project_id, entry)
+                self._mods_expander.add_row(row)
+                self._mod_rows.append(row)
+
+            for mod_id, entry in sorted(
+                curseforge_entries.items(),
+                key=lambda item: (str(item[1].get("title", "")).strip() or item[0]).lower(),
+            ):
+                row = self._make_curseforge_pack_row(mod_id, entry)
                 self._mods_expander.add_row(row)
                 self._mod_rows.append(row)
 
@@ -289,7 +320,9 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, W
                 info = self._add_info_row_to_expander(self._mods_expander, _("No mods installed"))
                 self._mod_rows.append(info)
 
-            total_mods = len(entries) + len([j for j in jars if j.name.lower() not in managed_set])
+            total_mods = (
+                len(entries) + len(curseforge_entries) + len([j for j in jars if j.name.lower() not in managed_set])
+            )
             self._mods_expander.set_subtitle(_("{} item(s)").format(total_mods) if total_mods else _("None installed"))
 
         if self._datapacks_expander:

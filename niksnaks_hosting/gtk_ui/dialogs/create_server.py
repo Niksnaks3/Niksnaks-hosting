@@ -83,6 +83,9 @@ class CreateServerDialog(Adw.Dialog):
         self._loader_fetch_key: tuple[str, str] = ("", "")
         self._icon_source_path: str = ""
         self._world_import_source_path: str = ""
+        # label, archive path, id of the server it came from ("" when browsed off disk)
+        self._backup_choices: list[tuple[str, Path, str]] = []
+        self._backup_edition: str = EDITION_JAVA
 
         self.set_title(_("Create Server"))
         self.set_content_width(500)
@@ -123,6 +126,7 @@ class CreateServerDialog(Adw.Dialog):
         self._toolbar_view.set_content(self._stack)
         self.set_child(self._toolbar_view)
 
+        self._reload_backup_options()
         self._apply_edition_visibility()
         self._fetch_versions()
 
@@ -158,9 +162,37 @@ class CreateServerDialog(Adw.Dialog):
 
         page.add(info_group)
 
-        world_group = Adw.PreferencesGroup(
+        self._backup_group = Adw.PreferencesGroup(
+            title=_("Start from backup"),
+            description=_("Set the new server up from a full backup instead of installing a fresh one."),
+        )
+
+        self._backup_row = Adw.ComboRow(
+            title=_("Full backup"),
+            model=Gtk.StringList.new([_("Don't use a backup")]),
+        )
+        self._backup_row.connect("notify::selected", self._on_backup_selected)
+        self._backup_group.add(self._backup_row)
+
+        self._backup_file_row = Adw.ActionRow(
+            title=_("Choose a backup file"),
+            subtitle=_("Pick a full backup .zip from anywhere on this computer"),
+        )
+        self._choose_backup_btn = Gtk.Button(valign=Gtk.Align.CENTER)
+        self._choose_backup_btn.add_css_class("flat")
+        self._choose_backup_btn.set_tooltip_text(_("Choose backup file"))
+        self._choose_backup_btn.set_child(Gtk.Image.new_from_icon_name("folder-symbolic"))
+        self._choose_backup_btn.connect("clicked", self._on_choose_backup_file)
+        self._backup_file_row.add_suffix(self._choose_backup_btn)
+        self._backup_file_row.set_activatable_widget(self._choose_backup_btn)
+        self._backup_group.add(self._backup_file_row)
+
+        page.add(self._backup_group)
+
+        self._world_group = Adw.PreferencesGroup(
             title=_("World defaults"),
         )
+        world_group = self._world_group
 
         self._difficulty_values = list(DIFFICULTY_MODES)
         difficulty_labels = [
@@ -207,7 +239,7 @@ class CreateServerDialog(Adw.Dialog):
         world_group.add(self._seed_entry)
 
         self._world_import_row = Adw.ActionRow(
-            title=_("Import world folder"),
+            title=_("Import world"),
             subtitle=_("No world selected."),
         )
         self._choose_world_btn = Gtk.Button(valign=Gtk.Align.CENTER)
@@ -216,6 +248,13 @@ class CreateServerDialog(Adw.Dialog):
         self._choose_world_btn.set_child(Gtk.Image.new_from_icon_name("folder-symbolic"))
         self._choose_world_btn.connect("clicked", self._on_choose_world_folder)
         self._world_import_row.add_suffix(self._choose_world_btn)
+
+        self._choose_world_archive_btn = Gtk.Button(valign=Gtk.Align.CENTER)
+        self._choose_world_archive_btn.add_css_class("flat")
+        self._choose_world_archive_btn.set_tooltip_text(_("Choose world archive"))
+        self._choose_world_archive_btn.set_child(Gtk.Image.new_from_icon_name("package-x-generic-symbolic"))
+        self._choose_world_archive_btn.connect("clicked", self._on_choose_world_archive)
+        self._world_import_row.add_suffix(self._choose_world_archive_btn)
 
         self._remove_world_btn = Gtk.Button(valign=Gtk.Align.CENTER)
         self._remove_world_btn.add_css_class("flat")
@@ -239,9 +278,10 @@ class CreateServerDialog(Adw.Dialog):
 
         page = Adw.PreferencesPage()
 
-        version_group = Adw.PreferencesGroup(
+        self._version_group = Adw.PreferencesGroup(
             title=_("Runtime"),
         )
+        version_group = self._version_group
 
         self._edition_row = Adw.ComboRow(
             title=_("Edition"),
@@ -388,21 +428,37 @@ class CreateServerDialog(Adw.Dialog):
         self._java_version_row.set_visible(not bedrock)
         self._mods_group.set_visible(not bedrock)
 
-        # It has no heap either, so the same number becomes an OS-enforced ceiling.
-        self._ram_row.set_title(_("Memory Limit (MB)") if bedrock else _("Allocated RAM (MB)"))
+        # It has no heap either, so the same number becomes an OS-enforced ceiling. A backup
+        # decides the edition itself, so the label follows the archive rather than the combo.
+        limited = self._backup_edition == EDITION_BEDROCK if self._using_backup() else bedrock
+        self._ram_row.set_title(_("Memory Limit (MB)") if limited else _("Allocated RAM (MB)"))
         self._ram_row.set_subtitle(
-            _("Hard ceiling enforced by the system; the server stops if it is exceeded") if bedrock else ""
+            _("Hard ceiling enforced by the system; the server stops if it is exceeded") if limited else ""
         )
 
-        # Bedrock has no level-type, and its worlds use a different on-disk format.
+        # Bedrock has no level-type, but it does import worlds — as .mcworld.
         self._level_type_row.set_visible(not bedrock)
-        self._world_import_row.set_visible(not bedrock)
+        self._choose_world_btn.set_tooltip_text(_("Choose world folder"))
+        self._choose_world_archive_btn.set_tooltip_text(
+            _("Choose a .mcworld or .zip world") if bedrock else _("Choose a .zip world")
+        )
 
         self._mc_version_row.set_title(_("Bedrock version") if bedrock else _("Minecraft version"))
 
         difficulties = list(DIFFICULTIES) if bedrock else list(DIFFICULTY_MODES)
         gamemodes = list(BEDROCK_GAMEMODES) if bedrock else list(GAMEMODES)
         self._set_world_default_options(difficulties, gamemodes)
+
+        self._apply_backup_mode()
+
+    def _apply_backup_mode(self) -> None:
+        """A backup already carries its world, edition and loader, so those choices go away."""
+        using_backup = self._using_backup()
+
+        self._world_group.set_visible(not using_backup)
+        self._version_group.set_visible(not using_backup)
+        if using_backup:
+            self._mods_group.set_visible(False)
 
     def _set_world_default_options(self, difficulties: list[str], gamemodes: list[str]) -> None:
         previous_difficulty = (
@@ -602,48 +658,82 @@ class CreateServerDialog(Adw.Dialog):
         except GLib.Error:
             return
 
+    def _world_archive_filters(self) -> Gio.ListStore:
+        """File filters for the world archive formats the chosen edition understands."""
+        store = Gio.ListStore.new(Gtk.FileFilter)
+
+        if self._is_bedrock():
+            mcworld = Gtk.FileFilter()
+            mcworld.set_name(_("Bedrock world (.mcworld)"))
+            mcworld.add_pattern("*.mcworld")
+            store.append(mcworld)
+
+        archive = Gtk.FileFilter()
+        archive.set_name(_("Zip archive (.zip)"))
+        archive.add_pattern("*.zip")
+        store.append(archive)
+
+        return store
+
     def _on_choose_world_folder(self, *_args):
         dialog = Gtk.FileDialog()
         dialog.set_title(_("Import World Folder"))
         dialog.select_folder(self.get_root(), None, self._on_world_folder_chosen)
 
+    def _on_choose_world_archive(self, *_args):
+        dialog = Gtk.FileDialog()
+        dialog.set_title(_("Import World Archive"))
+        dialog.set_filters(self._world_archive_filters())
+        dialog.open(self.get_root(), None, self._on_world_archive_chosen)
+
     def _on_world_folder_chosen(self, dialog, result):
         try:
             selected = dialog.select_folder_finish(result)
-            if not selected:
-                return
-            path = selected.get_path() or ""
-            if not path:
-                return
-
-            from niksnaks_hosting.shared.utils.nbt_utils import get_world_info
-
-            seed, wtype = get_world_info(Path(path))
-
-            self._world_import_source_path = path
-
-            msg_parts = [f"{Path(path).name}"]
-            if seed:
-                self._seed_entry.set_text(seed)
-                msg_parts.append(_("Seed imported"))
-            if wtype and wtype in self._level_type_values:
-                self._level_type_row.set_selected(self._level_type_values.index(wtype))
-                msg_parts.append(_("Type imported"))
-
-            if len(msg_parts) == 1:
-                self._world_import_row.set_subtitle(
-                    _("{} - world type must match the selected World type").format(Path(path).name)
-                )
-            else:
-                self._world_import_row.set_subtitle(" · ".join(msg_parts))
-
-            self._choose_world_btn.set_visible(False)
-            self._remove_world_btn.set_visible(True)
-            self._world_import_row.set_activatable_widget(self._remove_world_btn)
-            self._seed_entry.set_sensitive(False)
-            self._level_type_row.set_sensitive(False)
         except GLib.Error:
             return
+
+        raw_path = selected.get_path() if selected else ""
+        if raw_path:
+            self._accept_world_source(Path(raw_path))
+
+    def _on_world_archive_chosen(self, dialog, result):
+        try:
+            selected = dialog.open_finish(result)
+        except GLib.Error:
+            return
+
+        raw_path = selected.get_path() if selected else ""
+        if raw_path:
+            self._accept_world_source(Path(raw_path))
+
+    def _accept_world_source(self, path: Path) -> None:
+        self._world_import_source_path = str(path)
+        message_parts = [path.name]
+
+        # Only an unpacked Java world exposes its seed and type in a level.dat this app
+        # can read; Bedrock's format and packed archives keep them out of reach until import.
+        if not self._is_bedrock() and path.is_dir():
+            from niksnaks_hosting.shared.utils.nbt_utils import get_world_info
+
+            seed, wtype = get_world_info(path)
+            if seed:
+                self._seed_entry.set_text(seed)
+                message_parts.append(_("Seed imported"))
+            if wtype and wtype in self._level_type_values:
+                self._level_type_row.set_selected(self._level_type_values.index(wtype))
+                message_parts.append(_("Type imported"))
+
+            if len(message_parts) == 1:
+                message_parts.append(_("world type must match the selected World type"))
+
+        self._world_import_row.set_subtitle(" · ".join(message_parts))
+
+        self._choose_world_btn.set_visible(False)
+        self._choose_world_archive_btn.set_visible(False)
+        self._remove_world_btn.set_visible(True)
+        self._world_import_row.set_activatable_widget(self._remove_world_btn)
+        self._seed_entry.set_sensitive(False)
+        self._level_type_row.set_sensitive(False)
 
     def _on_remove_world(self, *_args):
         self._world_import_source_path = ""
@@ -655,8 +745,70 @@ class CreateServerDialog(Adw.Dialog):
             self._level_type_row.set_selected(self._level_type_values.index(default_level_type))
         self._level_type_row.set_sensitive(True)
         self._choose_world_btn.set_visible(True)
+        self._choose_world_archive_btn.set_visible(True)
         self._remove_world_btn.set_visible(False)
         self._world_import_row.set_activatable_widget(self._choose_world_btn)
+
+    def _reload_backup_options(self) -> None:
+        options = self._server_manager.list_full_backups()
+        self._backup_choices = [(option.label, option.path, option.server_id) for option in options]
+        self._set_backup_model(0)
+
+    def _set_backup_model(self, selected: int) -> None:
+        labels = [_("Don't use a backup")] + [choice[0] for choice in self._backup_choices]
+        self._backup_row.set_model(Gtk.StringList.new(labels))
+        self._backup_row.set_selected(selected)
+
+    def _using_backup(self) -> bool:
+        return self._backup_row.get_selected() > 0
+
+    def _selected_backup(self) -> tuple[Path, str] | None:
+        index = self._backup_row.get_selected() - 1
+        if 0 <= index < len(self._backup_choices):
+            choice = self._backup_choices[index]
+            return choice[1], choice[2]
+        return None
+
+    def _on_backup_selected(self, *_args):
+        chosen = self._selected_backup()
+        if chosen:
+            self._backup_edition = ServerManager.peek_backup_edition(chosen[0])
+        self._apply_edition_visibility()
+        self._validate()
+
+    def _on_choose_backup_file(self, *_args):
+        dialog = Gtk.FileDialog()
+        dialog.set_title(_("Choose a backup file"))
+
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        archive = Gtk.FileFilter()
+        archive.set_name(_("Zip archive (.zip)"))
+        archive.add_pattern("*.zip")
+        filters.append(archive)
+        dialog.set_filters(filters)
+
+        dialog.open(self.get_root(), None, self._on_backup_file_chosen)
+
+    def _on_backup_file_chosen(self, dialog, result):
+        try:
+            selected = dialog.open_finish(result)
+        except GLib.Error:
+            return
+
+        raw_path = selected.get_path() if selected else ""
+        if not raw_path:
+            return
+
+        # The picker's own entries come from iterdir(), so compare resolved paths rather
+        # than however the file chooser happened to spell this one.
+        path = Path(raw_path)
+        resolved = path.resolve()
+        index = next((i for i, choice in enumerate(self._backup_choices) if choice[1].resolve() == resolved), None)
+        if index is None:
+            self._backup_choices.append((path.name, path, ""))
+            index = len(self._backup_choices) - 1
+
+        self._set_backup_model(index + 1)
 
     def _on_page_changed(self, *_args):
         self._validate()
@@ -680,7 +832,8 @@ class CreateServerDialog(Adw.Dialog):
             self._cancel_btn.set_label(_("Back"))
             self._cancel_btn.set_sensitive(True)
             self._create_btn.set_label(_("Create"))
-            self._create_btn.set_sensitive(bool(name) and has_versions)
+            # A backup brings its own server files, so no version has to be resolved first.
+            self._create_btn.set_sensitive(bool(name) and (self._using_backup() or has_versions))
             return
 
         self._cancel_btn.set_label(_("Cancel"))
@@ -702,6 +855,29 @@ class CreateServerDialog(Adw.Dialog):
             return
 
         name = self._name_entry.get_text().strip()
+
+        if self._using_backup():
+            chosen = self._selected_backup()
+            if not name or not chosen:
+                return
+
+            self._stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT)
+            self._stack.set_visible_child_name("progress")
+            self._create_btn.set_sensitive(False)
+
+            threading.Thread(
+                target=self._install_from_backup_thread,
+                args=(
+                    name,
+                    chosen[0],
+                    chosen[1],
+                    int(self._ram_row.get_value()),
+                    self._icon_source_path,
+                ),
+                daemon=True,
+            ).start()
+            return
+
         mc_idx = self._mc_version_row.get_selected()
         mc_version = self._game_versions[mc_idx] if mc_idx < len(self._game_versions) else ""
 
@@ -740,6 +916,7 @@ class CreateServerDialog(Adw.Dialog):
                     difficulty_for_config,
                     gamemode,
                     self._icon_source_path,
+                    self._world_import_source_path,
                 ),
                 daemon=True,
             ).start()
@@ -787,7 +964,38 @@ class CreateServerDialog(Adw.Dialog):
         )
         thread.start()
 
-    def _install_bedrock_thread(self, name, option, ram_mb, seed, difficulty, gamemode, icon_source_path):
+    def _install_from_backup_thread(self, name, archive, source_server_id, ram_mb, icon_source_path):
+
+        try:
+            self._update_progress(0.02, _("Restoring from backup..."), Path(archive).name)
+            success, result, server_info = self._server_manager.create_server_from_backup(
+                name,
+                archive,
+                ram_mb=ram_mb,
+                source_server_id=source_server_id,
+                progress_callback=lambda frac, text: self._update_progress(0.02 + frac * 0.90, text, ""),
+            )
+            if not success or not server_info:
+                self._show_error(result)
+                return
+
+            if icon_source_path:
+                self._update_progress(0.95, _("Applying server icon..."), "")
+                try:
+                    icon_output = server_info.server_dir / "icon.png"
+                    convert_to_png(icon_source_path, str(icon_output), size=128)
+                    self._server_manager.set_server_icon(server_info.id, str(icon_output))
+                except Exception:
+                    pass
+
+            self._show_success(server_info.id)
+
+        except Exception as e:
+            self._show_error(_("Unexpected error: {}").format(e))
+
+    def _install_bedrock_thread(
+        self, name, option, ram_mb, seed, difficulty, gamemode, icon_source_path, world_import_source_path
+    ):
 
         try:
             self._update_progress(0.05, _("Creating server..."), _("Bedrock {}").format(option.version))
@@ -820,6 +1028,17 @@ class CreateServerDialog(Adw.Dialog):
             config.set_value("gamemode", gamemode)
             config.set_value("level-seed", seed)
             config.save()
+
+            # After the config, so the world lands under the level-name the server will load.
+            if world_import_source_path:
+                self._update_progress(0.93, _("Importing world..."), "")
+                success, msg = self._server_manager.import_world_folder(
+                    server_info.id,
+                    world_import_source_path,
+                )
+                if not success:
+                    self._show_error(_("Failed to import world: {}").format(msg))
+                    return
 
             if icon_source_path:
                 self._update_progress(0.95, _("Applying server icon..."), "")
@@ -985,7 +1204,7 @@ class CreateServerDialog(Adw.Dialog):
             self._server_manager.set_server_port(server_info.id, 25565)
 
             if world_import_source_path:
-                self._update_progress(0.90, _("Importing world folder..."), "")
+                self._update_progress(0.90, _("Importing world..."), "")
                 success, msg = self._server_manager.import_world_folder(
                     server_info.id,
                     world_import_source_path,

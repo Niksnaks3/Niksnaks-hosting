@@ -8,15 +8,35 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Adw, Gdk, GLib, Gtk
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 from niksnaks_hosting.shared.backend.config_manager import ConfigManager
-from niksnaks_hosting.shared.utils.constants import LEVEL_TYPE_NAMES, LEVEL_TYPES
+from niksnaks_hosting.shared.utils.constants import LEVEL_TYPE_NAMES, LEVEL_TYPES, is_bedrock
 from niksnaks_hosting.shared.utils.nbt_utils import get_world_info
 
 from ..utils import *
 
 class WorldsMixin:
+    def _is_bedrock_server(self) -> bool:
+        return bool(self._server_info) and is_bedrock(self._server_info.edition)
+
+    def _world_archive_filters(self) -> Gio.ListStore:
+        """File filters for the world archive formats this server understands."""
+        store = Gio.ListStore.new(Gtk.FileFilter)
+
+        if self._is_bedrock_server():
+            mcworld = Gtk.FileFilter()
+            mcworld.set_name(_("Bedrock world (.mcworld)"))
+            mcworld.add_pattern("*.mcworld")
+            store.append(mcworld)
+
+        archive = Gtk.FileFilter()
+        archive.set_name(_("Zip archive (.zip)"))
+        archive.add_pattern("*.zip")
+        store.append(archive)
+
+        return store
+
     def _configured_world_seed(self) -> str:
         if not self._server_info:
             return ""
@@ -126,9 +146,22 @@ class WorldsMixin:
         import_row = Adw.ActionRow(title=_("Import World Folder"))
         import_row.add_prefix(Gtk.Image.new_from_icon_name("folder-download-symbolic"))
         import_row.set_activatable(True)
-        import_row.connect("activated", lambda *_: self._on_import_world())
+        import_row.connect("activated", lambda *_p: self._on_import_world())
+
+        bedrock = self._is_bedrock_server()
+        archive_row = Adw.ActionRow(
+            title=_("Import World Archive"),
+            subtitle=_("From a .mcworld or .zip file") if bedrock else _("From a .zip file"),
+        )
+        archive_row.add_prefix(Gtk.Image.new_from_icon_name("package-x-generic-symbolic"))
+        archive_row.set_activatable(True)
+        archive_row.connect("activated", lambda *_p: self._on_import_world_archive())
+
+        if bedrock:
+            export_row.set_subtitle(_("Saves a .mcworld you can open in Minecraft"))
 
         actions_group.add(import_row)
+        actions_group.add(archive_row)
         actions_group.add(reset_row)
         actions_group.add(export_row)
 
@@ -233,17 +266,31 @@ class WorldsMixin:
         dialog.connect("response", on_response)
         dialog.present(self.get_root())
 
-    def _on_import_world(self, *_):
+    def _can_import_world(self) -> bool:
         if self._is_running():
             self._alert(_("Server is running"), _("Stop the server before importing a world."))
-            return
+            return False
         if not self._server_info or not self._server_manager:
             self._alert(_("No server selected"), _("Select a server before importing a world."))
+            return False
+        return True
+
+    def _on_import_world(self, *_args):
+        if not self._can_import_world():
             return
 
         dialog = Gtk.FileDialog()
         dialog.set_title(_("Import World Folder"))
         dialog.select_folder(self.get_root(), None, self._on_import_world_folder_selected)
+
+    def _on_import_world_archive(self, *_args):
+        if not self._can_import_world():
+            return
+
+        dialog = Gtk.FileDialog()
+        dialog.set_title(_("Import World Archive"))
+        dialog.set_filters(self._world_archive_filters())
+        dialog.open(self.get_root(), None, self._on_import_world_archive_selected)
 
     def _on_import_world_folder_selected(self, dialog, result):
         try:
@@ -251,16 +298,42 @@ class WorldsMixin:
         except GLib.Error:
             return
 
-        path = Path(selected.get_path() or "")
-        if not path:
+        raw_path = selected.get_path() if selected else ""
+        if not raw_path:
             return
 
+        self._confirm_world_import(
+            Path(raw_path),
+            _("Import world folder?"),
+            _("Niksnaks-Hosting will replace the existing world with the imported folder."),
+        )
+
+    def _on_import_world_archive_selected(self, dialog, result):
+        try:
+            selected = dialog.open_finish(result)
+        except GLib.Error:
+            return
+
+        raw_path = selected.get_path() if selected else ""
+        if not raw_path:
+            return
+
+        self._confirm_world_import(
+            Path(raw_path),
+            _("Import world archive?"),
+            _("Niksnaks-Hosting will replace the existing world with the world inside “{}”.").format(
+                Path(raw_path).name
+            ),
+        )
+
+    def _confirm_world_import(self, path: Path, heading: str, body: str) -> None:
         confirm = Adw.AlertDialog()
-        confirm.set_heading(_("Import world folder?"))
-        confirm.set_body(_("Niksnaks-Hosting will replace the existing world with a the imported folder."))
+        confirm.set_heading(heading)
+        confirm.set_body(body)
         confirm.add_response("cancel", _("Cancel"))
         confirm.add_response("import", _("Import"))
-        confirm.set_default_response("import")
+        confirm.set_response_appearance("import", Adw.ResponseAppearance.DESTRUCTIVE)
+        confirm.set_default_response("cancel")
         confirm.set_close_response("cancel")
 
         def on_response(_dialog, response):
@@ -281,9 +354,13 @@ class WorldsMixin:
             self._alert(_("No server selected"), _("Select a server before exporting a world."))
             return
 
+        # Minecraft imports Bedrock worlds as .mcworld; Java has no such format.
+        suffix = ".mcworld" if self._is_bedrock_server() else ".zip"
+
         dialog = Gtk.FileDialog()
         dialog.set_title(_("Export World"))
-        dialog.set_initial_name(f"{path.name}.zip")
+        dialog.set_initial_name(f"{path.name}{suffix}")
+        dialog.set_filters(self._world_archive_filters())
         dialog.save(self.get_root(), None, lambda d, r, p=path: self._on_export_world_selected(d, r, p))
 
     def _on_export_world_selected(self, dialog, result, path: Path):
@@ -292,11 +369,11 @@ class WorldsMixin:
         except GLib.Error:
             return
 
-        dest = Path(selected.get_path() or "")
-        if not dest or not self._server_info or not self._server_manager:
+        raw_path = selected.get_path() if selected else ""
+        if not raw_path or not self._server_info or not self._server_manager:
             return
 
-        ok, msg = self._server_manager.export_world_zip(self._server_info.id, path, dest)
+        ok, msg = self._server_manager.export_world_zip(self._server_info.id, path, Path(raw_path))
         if ok:
             self._toast(_("World exported"))
         else:

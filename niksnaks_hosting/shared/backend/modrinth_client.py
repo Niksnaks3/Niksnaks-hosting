@@ -12,9 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from niksnaks_hosting.shared.utils.constants import APP_VERSION
 from niksnaks_hosting.shared.utils.net import make_ssl_context
 
-USER_AGENT = "Niksnaks-Hosting/1.0"
+USER_AGENT = f"Niksnaks-Hosting/{APP_VERSION}"
 API = "https://api.modrinth.com/v2"
 
 _SSL_CONTEXT = make_ssl_context()

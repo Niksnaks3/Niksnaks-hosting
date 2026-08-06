@@ -15,6 +15,7 @@ DEFAULT_SETTINGS = {
     "auto_backup_on_stop": True,
     "auto_delete_old_backups": True,
     "auto_resolve_mod_dependencies": True,
+    "curseforge_api_key": "",
     "theme": "system",
     "language": "system",
 }
@@ -105,6 +106,16 @@ class PreferencesManager:
     @auto_resolve_mod_dependencies.setter
     def auto_resolve_mod_dependencies(self, value: bool) -> None:
         self._settings["auto_resolve_mod_dependencies"] = bool(value)
+        self._save()
+
+    @property
+    def curseforge_api_key(self) -> str:
+        """Optional. Without one the app reads CurseForge through a public mirror."""
+        return str(self._settings.get("curseforge_api_key", "") or "").strip()
+
+    @curseforge_api_key.setter
+    def curseforge_api_key(self, value: str) -> None:
+        self._settings["curseforge_api_key"] = str(value or "").strip()
         self._save()
 
     @property
