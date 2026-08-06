@@ -82,10 +82,17 @@ class ServerProcess(EventEmitter):
     def _build_bedrock_command(self) -> tuple[list[str], str]:
         from niksnaks_hosting.shared.backend.bedrock_manager import BedrockManager
 
-        binary = BedrockManager().server_binary(self.server_dir)
-        if not binary:
-            return [], "Bedrock server executable not found (reinstall the server files)"
-        return [str(binary)], ""
+        manager = BedrockManager()
+        binary = manager.server_binary(self.server_dir)
+        if binary:
+            return [str(binary)], ""
+
+        if manager.foreign_binary(self.server_dir):
+            return [], (
+                "This server's files were made for a different operating system. "
+                "Open Properties and use the version button to install the Bedrock server files for this computer."
+            )
+        return [], "Bedrock server executable not found (reinstall the server files)"
 
     def start(self) -> bool:
         if self.is_running:

@@ -1,6 +1,7 @@
 import json
 import re
 import shutil
+import sys
 import tempfile
 import uuid
 import zipfile
@@ -18,6 +19,7 @@ from niksnaks_hosting.shared.backend.preferences_manager import PreferencesManag
 from niksnaks_hosting.shared.backend.server_process import ServerProcess
 from niksnaks_hosting.shared.core.events import EventEmitter
 from niksnaks_hosting.shared.utils.constants import (
+    BEDROCK_BINARY_NAMES,
     BEDROCK_DEFAULT_PORT,
     BEDROCK_WORLDS_DIR,
     CONFIG_FILE,
@@ -43,8 +45,21 @@ FULL_BACKUP_NAME_RE = r"^(?:niksnaks-hosting|hosty)-full-backup-(.+)-\d{8}-\d{6}
 # Bedrock ships worlds as .mcworld; our own exports and backups are plain .zip.
 WORLD_ARCHIVE_SUFFIXES = (".mcworld", ".zip")
 
-# A backup may have been taken on the other platform, so recognise either binary.
-BEDROCK_BINARY_NAMES = ("bedrock_server", "bedrock_server.exe")
+def _restore_exec_bits(archive: zipfile.ZipFile, destination: Path) -> None:
+    """Re-apply execute permissions, which zipfile.extractall drops.
+
+    A Bedrock server restored from a backup is unlaunchable without this.
+    """
+    if sys.platform == "win32":
+        return
+    for entry in archive.infolist():
+        if entry.is_dir() or not (entry.external_attr >> 16) & 0o111:
+            continue
+        target = destination / entry.filename
+        try:
+            target.chmod(target.stat().st_mode | 0o111)
+        except OSError:
+            continue
 
 def _safe_extract_zip(archive: Path, destination: Path) -> None:
     """Extract *archive* into *destination*, refusing entries that escape it."""
@@ -55,6 +70,7 @@ def _safe_extract_zip(archive: Path, destination: Path) -> None:
             if not (root / entry.filename).resolve().is_relative_to(root):
                 raise ValueError(_("Archive contains invalid paths."))
         zf.extractall(root)
+        _restore_exec_bits(zf, root)
 
 @dataclass(frozen=True)
 class FullBackupOption:
@@ -488,6 +504,64 @@ class ServerManager(EventEmitter):
 
         progress(1.0, _("Server runtime updated"))
         return True, _("Updated to Bedrock {}.").format(option.version)
+
+    def bedrock_runtime_missing(self, server_id: str) -> bool:
+        """Whether a Bedrock server has no executable this computer can run."""
+        info = self._servers.get(server_id)
+        if not info or not is_bedrock(info.edition):
+            return False
+        return not self.bedrock_manager.is_installed(info.server_dir)
+
+    def repair_bedrock_runtime(
+        self,
+        server_id: str,
+        option: BedrockVersionOption | None = None,
+        progress_callback=None,
+    ) -> tuple[bool, str]:
+        """Install the Bedrock executable for this computer, keeping worlds and settings.
+
+        No backup is taken first: there is no working runtime here to preserve.
+        """
+        info = self._servers.get(server_id)
+        if not info:
+            return False, _("Server not found")
+
+        if not is_bedrock(info.edition):
+            return False, _("This server is not a Bedrock Edition server")
+
+        process = self._processes.get(server_id)
+        if process and process.is_running:
+            return False, _("Cannot reinstall the server files while the server is running")
+
+        if self.bedrock_manager.is_installed(info.server_dir):
+            return True, _("The Bedrock server files are already installed.")
+
+        def progress(frac: float, msg: str) -> None:
+            if progress_callback:
+                progress_callback(frac, msg)
+
+        if option is None:
+            progress(0.0, _("Looking up the Bedrock server..."))
+            options = self.bedrock_manager.fetch_versions()
+            option = next((entry for entry in options if not entry.preview), options[0] if options else None)
+        if not option:
+            return False, _("Could not reach the Bedrock server download page")
+
+        foreign = self.bedrock_manager.foreign_binary(info.server_dir)
+
+        ok, msg = self.install_bedrock_server(
+            server_id,
+            option,
+            progress_callback=progress,
+            keep_existing_config=True,
+        )
+        if not ok:
+            return False, msg
+
+        if foreign:
+            foreign.unlink(missing_ok=True)
+
+        return True, _("Installed Bedrock server {} for this computer.").format(option.version)
 
     def _json_file(self, path: Path) -> dict:
         try:
@@ -1979,6 +2053,13 @@ class ServerManager(EventEmitter):
             self.delete_server(info.id, delete_files=True)
             return False, str(e), None
 
+        if self.bedrock_runtime_missing(info.id):
+            report(0.95, _("Downloading Bedrock server files..."))
+            self.repair_bedrock_runtime(
+                info.id,
+                progress_callback=lambda frac, text: report(0.95 + frac * 0.05, text),
+            )
+
         self.emit_on_main_thread("server-changed", info.id)
         return True, info.id, info
 
@@ -2002,7 +2083,7 @@ class ServerManager(EventEmitter):
             except OSError:
                 continue
 
-    def restore_world_backup(self, server_id: str, zip_path: Path) -> tuple[bool, str]:
+    def restore_world_backup(self, server_id: str, zip_path: Path, progress_callback=None) -> tuple[bool, str]:
         import shutil
         import tempfile
 
@@ -2034,6 +2115,7 @@ class ServerManager(EventEmitter):
                         elif not str(candidate).startswith(str(tmp_root)):
                             return False, _("Backup archive contains invalid paths.")
                     zf.extractall(tmp_root)
+                    _restore_exec_bits(zf, tmp_root)
 
                 if is_full:
 
@@ -2095,6 +2177,12 @@ class ServerManager(EventEmitter):
                             shutil.rmtree(dst, ignore_errors=True)
                         shutil.copytree(item, dst, dirs_exist_ok=True)
 
-            return True, _("Restored.")
+            if not is_full or not self.bedrock_runtime_missing(server_id):
+                return True, _("Restored.")
+
+            ok, detail = self.repair_bedrock_runtime(server_id, progress_callback=progress_callback)
+            if ok:
+                return True, _("Restored. {}").format(detail)
+            return True, _("Restored, but the Bedrock server files could not be installed: {}").format(detail)
         except Exception as e:
             return False, str(e)

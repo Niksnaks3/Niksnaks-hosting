@@ -441,6 +441,8 @@ class PropertiesView(Gtk.Box):
             if is_bedrock(self._server_info.edition):
                 edition_display = get_edition_display_name(self._server_info.edition)
                 version_text = f"{edition_display} · {self._server_info.mc_version or _('Unknown')}"
+                if self._server_manager and self._server_manager.bedrock_runtime_missing(self._server_info.id):
+                    version_text += " · " + _("server files missing")
             else:
                 loader_display = get_loader_display_name(self._server_info.loader_type)
                 version_text = f"{loader_display} · {self._server_info.mc_version or _('Unknown')}"
@@ -460,6 +462,11 @@ class PropertiesView(Gtk.Box):
         self._change_version_btn.set_sensitive(False)
         self._change_version_btn.set_tooltip_text(_("Checking for newer Minecraft versions..."))
         bedrock = self._is_bedrock_server()
+
+        if bedrock and self._server_manager.bedrock_runtime_missing(self._server_info.id):
+            self._change_version_btn.set_sensitive(True)
+            self._change_version_btn.set_tooltip_text(_("Install the Bedrock server files for this computer"))
+            return
 
         def worker():
             current = self._server_info.mc_version
@@ -837,8 +844,10 @@ class PropertiesView(Gtk.Box):
         server_manager = self._server_manager
         server_info = self._server_info
 
+        repairing = server_manager.bedrock_runtime_missing(server_info.id)
+
         dialog = Adw.Dialog()
-        dialog.set_title(_("Update Version"))
+        dialog.set_title(_("Install Server Files") if repairing else _("Update Version"))
         dialog.set_content_width(520)
         dialog.set_content_height(320)
 
@@ -847,7 +856,7 @@ class PropertiesView(Gtk.Box):
         header.set_show_start_title_buttons(False)
         header.set_show_end_title_buttons(False)
         cancel_btn = Gtk.Button(label=_("Cancel"))
-        primary_btn = Gtk.Button(label=_("Update"))
+        primary_btn = Gtk.Button(label=_("Install") if repairing else _("Update"))
         primary_btn.add_css_class("suggested-action")
         primary_btn.set_sensitive(False)
         header.pack_start(cancel_btn)
@@ -857,7 +866,14 @@ class PropertiesView(Gtk.Box):
         page = Adw.PreferencesPage()
         group = Adw.PreferencesGroup(
             title=_("Runtime"),
-            description=_("Worlds, server.properties and the allow list are kept. A full backup is made first."),
+            description=(
+                _(
+                    "This server's files came from a different operating system, so its "
+                    "executable cannot run here. Worlds, server.properties and the allow list are kept."
+                )
+                if repairing
+                else _("Worlds, server.properties and the allow list are kept. A full backup is made first.")
+            ),
         )
         version_row = Adw.ComboRow(
             title=_("Bedrock version"),
@@ -867,7 +883,10 @@ class PropertiesView(Gtk.Box):
         version_row.set_sensitive(False)
         group.add(version_row)
 
-        progress_row = Adw.ActionRow(title=_("Updating server"), subtitle="")
+        progress_row = Adw.ActionRow(
+            title=_("Installing server files") if repairing else _("Updating server"),
+            subtitle="",
+        )
         progress_row.set_visible(False)
         group.add(progress_row)
         progress_bar = Gtk.ProgressBar()
@@ -920,7 +939,12 @@ class PropertiesView(Gtk.Box):
                 GLib.idle_add(update)
 
             def worker():
-                ok, msg = server_manager.update_bedrock_server(server_info.id, option, progress_callback=progress)
+                if repairing:
+                    ok, msg = server_manager.repair_bedrock_runtime(
+                        server_info.id, option, progress_callback=progress
+                    )
+                else:
+                    ok, msg = server_manager.update_bedrock_server(server_info.id, option, progress_callback=progress)
 
                 def done():
                     if ok:

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import shutil
-import tempfile
 import threading
 import zipfile
 from datetime import datetime
@@ -16,7 +14,6 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Adw, GLib, Gtk
 
 from niksnaks_hosting.shared.backend.server_manager import (
-    BACKUP_DIR_NAMES,
     FULL_BACKUP_PREFIXES,
     ServerManager,
 )
@@ -299,97 +296,30 @@ class BackupsMixin:
             self._alert(_("Backup task active"), _("Wait for the active backup task to finish."))
             return
 
-        root = self._server_dir()
-        bdir = self._backups_dir()
-        if not root or not bdir:
+        if not self._server_info or not self._server_manager:
             self._alert(_("No server selected"), _("Select a server before restoring a backup."))
             return
 
         self._backup_busy = True
+        server_id = self._server_info.id
+        server_manager = self._server_manager
+
+        self._toast(_("Restoring {}...").format(zp.name))
 
         def worker():
-            try:
-                with tempfile.TemporaryDirectory(prefix="niksnaks-hosting-restore-") as td:
-                    tmp_root = Path(td).resolve()
-                    with zipfile.ZipFile(zp, "r") as zf:
-                        for info in zf.infolist():
-                            candidate = (tmp_root / info.filename).resolve()
-                            if hasattr(candidate, "is_relative_to") and not candidate.is_relative_to(tmp_root):
-                                raise RuntimeError("Backup archive contains invalid paths.")
-                            elif not str(candidate).startswith(str(tmp_root)):
-                                raise RuntimeError("Backup archive contains invalid paths.")
-                        zf.extractall(tmp_root)
+            ok, msg = server_manager.restore_world_backup(server_id, zp)
 
-                    is_full = zp.name.startswith(FULL_BACKUP_PREFIXES)
-                    if is_full:
-
-                        for item in root.iterdir():
-                            if item.name in BACKUP_DIR_NAMES:
-                                continue
-                            if item.is_dir():
-                                shutil.rmtree(item, ignore_errors=True)
-                            else:
-                                item.unlink(missing_ok=True)
-
-                        for item in tmp_root.iterdir():
-                            dst = root / item.name
-                            if item.is_dir():
-                                shutil.copytree(item, dst, dirs_exist_ok=True)
-                            else:
-                                shutil.copy2(item, dst)
-                    else:
-                        extracted_worlds = _world_dirs(tmp_root)
-                        if not extracted_worlds:
-                            raise RuntimeError("This backup does not contain any world data.")
-
-                        level_name = "world"
-                        for item in root.iterdir():
-                            if not item.is_dir():
-                                continue
-                            if (
-                                (item / "level.dat").exists()
-                                or item.name.casefold() == level_name.casefold()
-                                or any(
-                                    (item / marker).exists()
-                                    for marker in (
-                                        "region",
-                                        "data",
-                                        "playerdata",
-                                        "poi",
-                                        "entities",
-                                        "stats",
-                                        "advancements",
-                                        "dimensions",
-                                        "DIM-1",
-                                        "DIM1",
-                                        "session.lock",
-                                        "uid.dat",
-                                    )
-                                )
-                            ):
-                                shutil.rmtree(item, ignore_errors=True)
-
-                        for item in extracted_worlds:
-                            dst = root / "world"
-                            if dst.is_dir():
-                                shutil.rmtree(dst, ignore_errors=True)
-                            shutil.copytree(item, dst, dirs_exist_ok=True)
-
-                def ui_ok():
-                    self._backup_busy = False
+            def done():
+                self._backup_busy = False
+                if ok:
                     self._rebuild_lists()
                     self._refresh_backup_list()
-                    self._toast(_("Backup restored"))
-
-                GLib.idle_add(ui_ok)
-            except Exception as e:
-                err_msg = str(e)
-
-                def ui_err(msg: str = err_msg):
-                    self._backup_busy = False
+                    self._toast(msg, timeout=6)
+                else:
                     self._alert(_("Restore failed"), msg)
+                return False
 
-                GLib.idle_add(ui_err)
+            GLib.idle_add(done)
 
         threading.Thread(target=worker, daemon=True).start()
 

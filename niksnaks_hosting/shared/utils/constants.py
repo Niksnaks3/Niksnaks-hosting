@@ -100,6 +100,7 @@ BEDROCK_DOWNLOAD_TYPES = {
     "linux": ("serverBedrockLinux", "serverBedrockPreviewLinux"),
 }
 BEDROCK_SERVER_BINARY = "bedrock_server.exe" if sys.platform == "win32" else "bedrock_server"
+BEDROCK_BINARY_NAMES = ("bedrock_server", "bedrock_server.exe")
 BEDROCK_DEFAULT_PORT = 19132
 BEDROCK_DEFAULT_PORT_V6 = 19133
 BEDROCK_WORLDS_DIR = "worlds"

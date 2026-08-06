@@ -11,6 +11,7 @@ from pathlib import Path
 import requests
 
 from niksnaks_hosting.shared.utils.constants import (
+    BEDROCK_BINARY_NAMES,
     BEDROCK_DOWNLOAD_LINKS_URL,
     BEDROCK_SERVER_BINARY,
     CACHE_DIR,
@@ -201,6 +202,17 @@ class BedrockManager:
 
     def is_installed(self, server_dir: str | Path) -> bool:
         return self.server_binary(server_dir) is not None
+
+    def foreign_binary(self, server_dir: str | Path) -> Path | None:
+        """The other operating system's server executable, left behind by a backup from there."""
+        root = Path(server_dir)
+        for name in BEDROCK_BINARY_NAMES:
+            if name == BEDROCK_SERVER_BINARY:
+                continue
+            candidate = root / name
+            if candidate.is_file():
+                return candidate
+        return None
 
     def launch_env(self, server_dir: str | Path) -> dict[str, str]:
 

@@ -19,6 +19,7 @@ niksnaks_hosting/gtk_ui/views/files/mixins/mods_mixin.py
 niksnaks_hosting/gtk_ui/views/files/mixins/players_mixin.py
 niksnaks_hosting/gtk_ui/views/files/mixins/worlds_mixin.py
 niksnaks_hosting/gtk_ui/views/files/mixins/modrinth_mixin.py
+niksnaks_hosting/gtk_ui/views/files/mixins/curseforge_mixin.py
 niksnaks_hosting/gtk_ui/views/performance_view.py
 niksnaks_hosting/gtk_ui/views/properties_view.py
 niksnaks_hosting/gtk_ui/views/server_detail.py

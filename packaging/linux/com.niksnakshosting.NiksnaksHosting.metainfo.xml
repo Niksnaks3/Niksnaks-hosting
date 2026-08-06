@@ -42,6 +42,16 @@
   </branding>
   <launchable type="desktop-id">com.niksnakshosting.NiksnaksHosting.desktop</launchable>
   <releases>
+    <release version="1.2.1" date="2026-08-06">
+      <description>
+        <p>Backup restore fixes:</p>
+        <ul>
+          <li>Restoring a Bedrock backup taken on another operating system now installs a server build that runs on this one</li>
+          <li>A Bedrock server missing its server files says so, and can install them from the properties page</li>
+          <li>Fixed restoring a Bedrock world backup into the wrong folder</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.2" date="2026-08-06">
       <description>
         <p>CurseForge modpacks and world handling:</p>
