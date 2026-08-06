@@ -14,6 +14,7 @@ from niksnaks_hosting.i18n import set_language as set_app_language
 from niksnaks_hosting.shared.backend.preferences_manager import PreferencesManager
 from niksnaks_hosting.shared.backend.server_manager import ServerManager
 from niksnaks_hosting.shared.utils.constants import DATA_DIR
+from niksnaks_hosting.shared.utils.storage import free_bytes, human_size
 
 def _open_data_folder() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -33,7 +34,12 @@ def show_preferences_window(
     group = Adw.PreferencesGroup(
         title=_("Application"),
     )
-    data_row = Adw.ActionRow(title=_("Data folder"), subtitle=str(DATA_DIR))
+    data_row = Adw.ActionRow(
+        title=_("Data folder"),
+        subtitle=_("{path}\n{free} free for servers and modpacks").format(
+            path=DATA_DIR, free=human_size(free_bytes(DATA_DIR))
+        ),
+    )
     data_button = Gtk.Button(valign=Gtk.Align.CENTER)
     data_image = Gtk.Image.new_from_icon_name("folder-open-symbolic")
     data_button.set_child(data_image)

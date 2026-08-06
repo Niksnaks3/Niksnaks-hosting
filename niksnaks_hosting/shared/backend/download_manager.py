@@ -15,6 +15,7 @@ from niksnaks_hosting.shared.utils.constants import (
     FORGE_VERSIONS_URL,
     LOADER_FABRIC,
     LOADER_FORGE,
+    TEMP_DIR,
     get_fabric_loader_versions_url,
     get_forge_full_version,
     get_forge_installer_url,
@@ -281,6 +282,7 @@ class DownloadManager:
 
         cmd = [
             java_path,
+            f"-Djava.io.tmpdir={TEMP_DIR}",
             "-jar",
             installer_jar,
             "server",
@@ -503,7 +505,7 @@ class DownloadManager:
         if progress_callback:
             progress_callback(0.3, _("Installing Forge server for MC {}...").format(mc_version))
 
-        cmd = [java_path, "-jar", installer_jar, "--installServer"]
+        cmd = [java_path, f"-Djava.io.tmpdir={TEMP_DIR}", "-jar", installer_jar, "--installServer"]
 
         try:
             result = subprocess.run(

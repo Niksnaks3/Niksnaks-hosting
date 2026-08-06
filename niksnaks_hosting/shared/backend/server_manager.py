@@ -2,7 +2,6 @@ import json
 import re
 import shutil
 import sys
-import tempfile
 import uuid
 import zipfile
 from dataclasses import dataclass
@@ -37,6 +36,7 @@ from niksnaks_hosting.shared.utils.constants import (
     normalize_loader,
 )
 from niksnaks_hosting.shared.utils.migration import BACKUPS_DIR, LEGACY_BACKUPS_DIR
+from niksnaks_hosting.shared.utils.storage import free_bytes, human_size, install_space_needed, scratch_dir
 
 BACKUP_DIR_NAMES = (BACKUPS_DIR, LEGACY_BACKUPS_DIR)
 FULL_BACKUP_PREFIXES = ("niksnaks-hosting-full-backup-", "hosty-full-backup-")
@@ -1701,8 +1701,8 @@ class ServerManager(EventEmitter):
         if src.is_file():
             if src.suffix.lower() not in WORLD_ARCHIVE_SUFFIXES:
                 return False, _("Select a .mcworld or .zip world archive")
-            with tempfile.TemporaryDirectory(prefix="niksnaks-hosting-world-") as td:
-                staged = Path(td) / "extracted"
+            with scratch_dir("niksnaks-hosting-world-") as td:
+                staged = td / "extracted"
                 try:
                     _safe_extract_zip(src, staged)
                 except (OSError, ValueError, zipfile.BadZipFile) as e:
@@ -1996,8 +1996,17 @@ class ServerManager(EventEmitter):
 
         source = self.get_server(source_server_id) if source_server_id else None
 
-        with tempfile.TemporaryDirectory(prefix="niksnaks-hosting-clone-") as td:
-            staged = Path(td) / "server"
+        # The archive is staged before it is copied into place, so the restore needs room
+        # for both copies at once.
+        needed = install_space_needed(src.stat().st_size)
+        available = free_bytes(SERVERS_DIR)
+        if available < needed:
+            return False, _("Not enough free space: about {needed} is needed and {free} is free.").format(
+                needed=human_size(needed), free=human_size(available)
+            ), None
+
+        with scratch_dir("niksnaks-hosting-clone-") as td:
+            staged = td / "server"
             report(0.05, _("Reading backup..."))
             try:
                 _safe_extract_zip(src, staged)
@@ -2085,7 +2094,6 @@ class ServerManager(EventEmitter):
 
     def restore_world_backup(self, server_id: str, zip_path: Path, progress_callback=None) -> tuple[bool, str]:
         import shutil
-        import tempfile
 
         info = self.get_server(server_id)
         if not info:
@@ -2105,8 +2113,8 @@ class ServerManager(EventEmitter):
         is_full = zip_path.name.startswith(FULL_BACKUP_PREFIXES)
 
         try:
-            with tempfile.TemporaryDirectory(prefix="niksnaks-hosting-restore-") as td:
-                tmp_root = Path(td).resolve()
+            with scratch_dir("niksnaks-hosting-restore-") as td:
+                tmp_root = td.resolve()
                 with zipfile.ZipFile(zip_path, "r") as zf:
                     for zi in zf.infolist():
                         candidate = (tmp_root / zi.filename).resolve()

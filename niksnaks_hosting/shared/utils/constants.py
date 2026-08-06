@@ -29,10 +29,16 @@ DATA_DIR = Path(_DATA_DIR_OVERRIDE or _default_data_dir())
 SERVERS_DIR = DATA_DIR / "servers"
 JRES_DIR = DATA_DIR / "jres"
 CACHE_DIR = DATA_DIR / "cache"
+TEMP_DIR = DATA_DIR / "tmp"
 CONFIG_FILE = DATA_DIR / "servers.json"
 
-for d in [DATA_DIR, SERVERS_DIR, JRES_DIR, CACHE_DIR]:
+for d in [DATA_DIR, SERVERS_DIR, JRES_DIR, CACHE_DIR, TEMP_DIR]:
     d.mkdir(parents=True, exist_ok=True)
+
+# Under Flatpak /tmp is a RAM-backed tmpfs of about half the machine's memory, which a
+# modpack fills long before the disk does. Point child processes at the data folder too.
+if sys.platform != "win32":
+    os.environ["TMPDIR"] = str(TEMP_DIR)
 
 if not _DATA_DIR_OVERRIDE:
     try:

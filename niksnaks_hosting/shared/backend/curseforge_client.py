@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import tempfile
 import urllib.parse
 import urllib.request
 import zipfile
@@ -19,6 +18,12 @@ from niksnaks_hosting.shared.utils.constants import (
     normalize_loader,
 )
 from niksnaks_hosting.shared.utils.net import make_ssl_context
+from niksnaks_hosting.shared.utils.storage import (
+    free_bytes,
+    human_size,
+    install_space_needed,
+    scratch_dir,
+)
 
 USER_AGENT = f"Niksnaks-Hosting/{APP_VERSION}"
 
@@ -607,8 +612,17 @@ def install_modpack(
             "Download it from the project page and import it manually."
         )
 
-    with tempfile.TemporaryDirectory(prefix="niksnaks-hosting-cf-") as tmp:
-        archive = Path(tmp) / (chosen.file_name or "modpack.zip")
+    needed = install_space_needed(chosen.file_length)
+    available = free_bytes(server_root)
+    if available < needed:
+        raise RuntimeError(
+            f"Not enough free space to install this modpack. It needs about "
+            f"{human_size(needed)} and only {human_size(available)} is free where the "
+            f"servers are stored."
+        )
+
+    with scratch_dir("niksnaks-hosting-cf-") as tmp:
+        archive = tmp / (chosen.file_name or "modpack.zip")
 
         def on_bytes(done: int, size: int) -> None:
             share = (done / size) if size else 0.0
