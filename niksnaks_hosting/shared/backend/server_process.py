@@ -1,6 +1,7 @@
 import re
 import subprocess
 import threading
+from collections import deque
 from pathlib import Path
 
 from niksnaks_hosting.shared.backend.loader_launch import resolve_launch_args
@@ -17,6 +18,8 @@ from niksnaks_hosting.shared.utils.constants import (
 )
 from niksnaks_hosting.shared.utils import memory_limit
 from niksnaks_hosting.shared.utils.subprocess_utils import hidden_subprocess_kwargs
+
+LOG_HISTORY_LINES = 1000
 
 class ServerProcess(EventEmitter):
     def __init__(
@@ -44,7 +47,9 @@ class ServerProcess(EventEmitter):
         self._stderr_thread: threading.Thread | None = None
         self._pid: int | None = None
         self._memory_limit_job = None
-        self.log_history: list[str] = []
+        # Bounded by the deque itself: dropping the oldest line is then O(1) rather than
+        # shifting a thousand entries on every line the server prints.
+        self.log_history: deque[str] = deque(maxlen=LOG_HISTORY_LINES)
 
     @property
     def status(self) -> str:
@@ -247,8 +252,6 @@ class ServerProcess(EventEmitter):
 
     def _emit_output(self, text: str):
         self.log_history.append(text)
-        if len(self.log_history) > 1000:
-            self.log_history.pop(0)
         self.emit_on_main_thread("output-received", text)
 
     def _emit_players_changed(self):

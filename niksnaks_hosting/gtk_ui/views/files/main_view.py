@@ -440,16 +440,19 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
         if not root or not root.is_dir():
             return tuple()
 
+        # This runs on the once-a-second poll while the Files tab is open, purely to spot
+        # a world appearing or disappearing. Every dimension path is built from its world
+        # dir, so relative_to needs no resolve() — and resolve() is what made this walk
+        # cost a syscall per dimension per second.
         snapshot: list[tuple[str, tuple[str, ...]]] = []
         for world in _world_dirs(root):
-            world_root = world.resolve()
             dim_keys: list[str] = []
             for _label, dim_path in _world_dimension_dirs(world):
                 try:
-                    rel = dim_path.resolve().relative_to(world_root)
+                    rel = dim_path.relative_to(world)
                     key = str(rel) if str(rel) else "."
-                except Exception:
-                    key = str(dim_path.resolve())
+                except ValueError:
+                    key = str(dim_path)
                 dim_keys.append(key.lower())
 
             snapshot.append((world.name.lower(), tuple(sorted(dim_keys))))

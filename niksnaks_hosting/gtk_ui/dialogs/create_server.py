@@ -89,6 +89,7 @@ class CreateServerDialog(Adw.Dialog):
         # Once the user picks a port themselves, the edition's default stops overwriting it.
         self._port_edited: bool = False
         self._suppress_port_change: bool = False
+        self._port_conflict_name: str | None = None
         # label, archive path, id of the server it came from ("" when browsed off disk)
         self._backup_choices: list[tuple[str, Path, str]] = []
         self._backup_edition: str = EDITION_JAVA
@@ -441,7 +442,13 @@ class CreateServerDialog(Adw.Dialog):
         return int(self._port_row.get_value())
 
     def _port_conflict(self) -> str | None:
-        return self._server_manager.find_port_conflict(self._selected_port(), self._effective_edition())
+        """The conflict as of the last port or edition change.
+
+        Answering this means reading every server's server.properties, and both the row
+        and the Create button ask on the same change, so the answer is worked out once
+        in _refresh_port_row and read from here.
+        """
+        return self._port_conflict_name
 
     def _on_port_changed(self, *_args) -> None:
         if self._suppress_port_change:
@@ -460,7 +467,8 @@ class CreateServerDialog(Adw.Dialog):
 
     def _refresh_port_row(self) -> None:
         port = self._selected_port()
-        conflict = self._port_conflict()
+        conflict = self._server_manager.find_port_conflict(port, self._effective_edition())
+        self._port_conflict_name = conflict
 
         if conflict:
             self._port_row.add_css_class("error")

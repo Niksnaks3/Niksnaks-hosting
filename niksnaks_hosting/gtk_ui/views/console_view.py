@@ -6,12 +6,21 @@ from gi.repository import GLib, Gtk, Pango
 
 from niksnaks_hosting.shared.backend.server_process import ServerProcess
 
+# A busy server prints for as long as it runs, and a Gtk.TextBuffer holding a whole
+# day of output makes the console — and every frame the window draws — slow. Keep the
+# most recent MAX_SCROLLBACK_LINES, and only trim once TRIM_SLACK lines have piled up
+# past that, so a delete costs one pass per thousand lines instead of one per line.
+MAX_SCROLLBACK_LINES = 5000
+TRIM_SLACK_LINES = 1000
+
 class ConsoleView(Gtk.Box):
     def __init__(self):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self._process = None
         self._output_handler_id = None
         self._auto_scroll = True
+        self._scroll_pending = False
+        self._lines_since_trim = 0
 
         self._scrolled = Gtk.ScrolledWindow()
         self._scrolled.set_vexpand(True)
@@ -80,6 +89,7 @@ class ConsoleView(Gtk.Box):
 
     def clear(self):
         self._buffer.set_text("")
+        self._lines_since_trim = 0
 
     def append_text(self, text: str):
         end_iter = self._buffer.get_end_iter()
@@ -99,12 +109,37 @@ class ConsoleView(Gtk.Box):
         else:
             self._buffer.insert(end_iter, text)
 
-        if self._auto_scroll:
+        self._trim_scrollback(text)
+
+        # A server can emit a burst of lines in one go; one scroll after the burst puts
+        # the view in the same place as one scroll per line, for a fraction of the work.
+        if self._auto_scroll and not self._scroll_pending:
+            self._scroll_pending = True
             GLib.idle_add(self._scroll_to_bottom)
 
+    def _trim_scrollback(self, text: str):
+        # Asking the buffer for its line count is the only cost on the common path, so do
+        # it once per slack window. Count the newlines actually added rather than the
+        # calls, so a chunk carrying many lines still moves the window along.
+        self._lines_since_trim += max(1, text.count("\n"))
+        if self._lines_since_trim < TRIM_SLACK_LINES:
+            return
+        self._lines_since_trim = 0
+
+        line_count = self._buffer.get_line_count()
+        if line_count <= MAX_SCROLLBACK_LINES + TRIM_SLACK_LINES:
+            return
+
+        found, cut = self._buffer.get_iter_at_line(line_count - MAX_SCROLLBACK_LINES)
+        if not found:
+            return
+        self._buffer.delete(self._buffer.get_start_iter(), cut)
+
     def _scroll_to_bottom(self):
+        self._scroll_pending = False
         end_iter = self._buffer.get_end_iter()
         self._textview.scroll_to_iter(end_iter, 0.0, True, 0.0, 1.0)
+        return False
 
     def _on_output_received(self, process, text):
         self.append_text(text)

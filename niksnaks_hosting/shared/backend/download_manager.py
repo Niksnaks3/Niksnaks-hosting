@@ -1,5 +1,6 @@
 import re
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,12 @@ from niksnaks_hosting.shared.utils.subprocess_utils import hidden_subprocess_kwa
 MOJANG_VERSION_MANIFEST = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json"
 
 FORGE_MIN_MC_VERSION = (1, 12, 0)
+
+# The game version list is asked for every time the create dialog opens, the loader or
+# edition is switched, and a server is selected in Properties — but it only changes when
+# Mojang ships a version. Hold it briefly so those are not all separate round trips,
+# while a session left open for hours still picks a new release up.
+GAME_VERSIONS_TTL_SECONDS = 600
 
 @dataclass(frozen=True)
 class LoaderVersionOption:
@@ -59,6 +66,7 @@ def _forge_build_sort_key(build: str) -> tuple[int, ...]:
 class DownloadManager:
     def __init__(self):
         self._game_versions: list[dict] = []
+        self._game_versions_fetched_at: float = 0.0
         self._loader_versions: list[dict] = []
         self._installer_url: str | None = None
         self._installer_version: str | None = None
@@ -68,20 +76,26 @@ class DownloadManager:
         self._fabric_loaders_by_game: dict[str, list[tuple[str, bool]]] = {}
 
     def fetch_game_versions(self, include_snapshots: bool = False) -> list[str]:
+        entries = self._fetch_game_version_entries()
+        return [v["version"] for v in entries if include_snapshots or v.get("stable", False)]
+
+    def _fetch_game_version_entries(self) -> list[dict]:
+        now = time.monotonic()
+        if self._game_versions and now - self._game_versions_fetched_at < GAME_VERSIONS_TTL_SECONDS:
+            return self._game_versions
+
         try:
             resp = requests.get(FABRIC_GAME_VERSIONS_URL, timeout=15)
             resp.raise_for_status()
             self._game_versions = resp.json()
-
-            versions = []
-            for v in self._game_versions:
-                if include_snapshots or v.get("stable", False):
-                    versions.append(v["version"])
-
-            return versions
+            self._game_versions_fetched_at = now
         except Exception as e:
             print(f"Failed to fetch game versions: {e}")
-            return []
+            # Serve the list we already hold rather than nothing: a dropped connection
+            # should not empty a version picker that was populated a minute ago.
+            return self._game_versions
+
+        return self._game_versions
 
     def fetch_loader_versions(self) -> list[str]:
         try:

@@ -22,6 +22,9 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         self._running_server_ids: set[str] = set(self._server_manager.get_running_server_ids())
         self._playit_starting_server_ids: set[str] = set()
         self._playit_autostart_paused_ids: set[str] = set()
+        # Last status handed to the portal or tray, so the once-a-second poll only pays
+        # for a DBus round trip when the text actually changed.
+        self._background_status: str = ""
 
         self.set_title(_("Niksnaks-Hosting"))
         try:
@@ -121,12 +124,10 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         if prefs.run_in_background_on_close and not self._quit_requested:
             self.set_visible(False)
 
-            from niksnaks_hosting.shared.utils.portal import set_background_status
-
             if self._server_manager.is_any_server_running():
-                set_background_status(_("Server running"))
+                self._set_background_status(_("Server running"))
             else:
-                set_background_status(_("Server not running"))
+                self._set_background_status(_("Server not running"))
 
             if hasattr(self.get_application(), "_is_held_for_background"):
                 app = self.get_application()
@@ -187,12 +188,10 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         previous_ids = self._running_server_ids
         self._running_server_ids = current_ids
 
-        from niksnaks_hosting.shared.utils.portal import set_background_status
-
         if current_ids:
-            set_background_status(_("{} server(s) running").format(len(current_ids)))
+            self._set_background_status(_("{} server(s) running").format(len(current_ids)))
         else:
-            set_background_status(_("Server not running"))
+            self._set_background_status(_("Server not running"))
 
         stopped_ids = previous_ids - current_ids
         for sid in stopped_ids:
@@ -209,6 +208,15 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
             self._apply_playit_runtime(sid, None)
 
         return True
+
+    def _set_background_status(self, message: str) -> None:
+        if message == self._background_status:
+            return
+        self._background_status = message
+
+        from niksnaks_hosting.shared.utils.portal import set_background_status
+
+        set_background_status(message)
 
     def _load_playit_config(self, server_id: str) -> dict:
         info = self._server_manager.get_server(server_id)
