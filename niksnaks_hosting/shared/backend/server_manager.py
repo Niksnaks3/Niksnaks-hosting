@@ -27,13 +27,17 @@ from niksnaks_hosting.shared.utils.constants import (
     EDITION_JAVA,
     LOADER_FABRIC,
     LOADER_FORGE,
+    MAX_SERVER_PORT,
+    MIN_SERVER_PORT,
     SERVERS_DIR,
+    default_port_for_edition,
     get_forge_full_version,
     get_required_java_version,
     get_loader_display_name,
     is_bedrock,
     normalize_edition,
     normalize_loader,
+    ports_bound_by,
 )
 from niksnaks_hosting.shared.utils.migration import BACKUPS_DIR, LEGACY_BACKUPS_DIR
 from niksnaks_hosting.shared.utils.storage import free_bytes, human_size, install_space_needed, scratch_dir
@@ -1282,19 +1286,41 @@ class ServerManager(EventEmitter):
                 return server_id
         return None
 
-    def get_used_ports(self) -> set[int]:
-        ports: set[int] = set()
+    def server_bound_ports(self, info: ServerInfo) -> set[int]:
+        """The ports *info* claims once it starts, read from its own server.properties."""
+        default = default_port_for_edition(info.edition)
+        try:
+            cfg = ConfigManager(info.server_dir)
+            cfg.load()
+            port = cfg.get_int("server-port", default)
+            # Bedrock's IPv6 port is configured separately, so read it rather than assume.
+            ports = {port, cfg.get_int("server-portv6", port + 1)} if is_bedrock(info.edition) else {port}
+        except Exception:
+            return set()
+        return {p for p in ports if MIN_SERVER_PORT <= p <= MAX_SERVER_PORT}
+
+    def ports_in_use(self, exclude_server_id: str = "") -> dict[int, str]:
+        """Ports the existing servers already claim, mapped to the server claiming each."""
+        owners: dict[int, str] = {}
         for sid, info in self._servers.items():
-            try:
-                cfg = self.get_config(sid)
-                if cfg:
-                    cfg.load()
-                    port = cfg.get_int("server-port", 25565)
-                    if 1024 <= port <= 65535:
-                        ports.add(port)
-            except Exception:
-                pass
-        return ports
+            if sid == exclude_server_id:
+                continue
+            for port in self.server_bound_ports(info):
+                owners.setdefault(port, info.name)
+        return owners
+
+    def get_used_ports(self, exclude_server_id: str = "") -> set[int]:
+        return set(self.ports_in_use(exclude_server_id))
+
+    def find_port_conflict(
+        self, port: int, edition: str = EDITION_JAVA, exclude_server_id: str = ""
+    ) -> str | None:
+        """Name of the server already holding *port* (or its Bedrock IPv6 partner), if any."""
+        owners = self.ports_in_use(exclude_server_id)
+        for candidate in sorted(ports_bound_by(port, edition)):
+            if candidate in owners:
+                return owners[candidate]
+        return None
 
     def get_used_bedrock_ports(self) -> set[int]:
         ports: set[int] = set()
@@ -1334,11 +1360,16 @@ class ServerManager(EventEmitter):
             port += 1
         return port
 
-    def get_next_available_port(self, base: int = 25565) -> int:
-        used = self.get_used_ports()
-        port = base
-        while port in used:
-            port += 1
+    def get_next_available_port(self, edition: str = EDITION_JAVA, exclude_server_id: str = "") -> int:
+        """The first port from this edition's default upwards that no server has claimed.
+
+        Bedrock steps in twos because it takes the next port for IPv6 as well.
+        """
+        owners = self.ports_in_use(exclude_server_id)
+        step = 2 if is_bedrock(edition) else 1
+        port = default_port_for_edition(edition)
+        while port + step - 1 <= MAX_SERVER_PORT and not ports_bound_by(port, edition).isdisjoint(owners):
+            port += step
         return port
 
     def set_server_port(self, server_id: str, port: int) -> None:
@@ -1349,6 +1380,10 @@ class ServerManager(EventEmitter):
         if cfg:
             cfg.load()
             cfg.set_value("server-port", port)
+            # Bedrock binds IPv6 separately; leaving it behind would collide with whichever
+            # server the old pair belonged to.
+            if is_bedrock(info.edition):
+                cfg.set_value("server-portv6", port + 1)
             cfg.save()
 
     def get_bedrock_port(self, server_id: str) -> int:
@@ -1462,30 +1497,22 @@ class ServerManager(EventEmitter):
             return False
 
     def check_port_conflict(self, server_id: str) -> int | None:
+        """The port stopping this server from starting, because a running one holds it."""
         info = self._servers.get(server_id)
         if not info:
             return None
-        cfg = self.get_config(server_id)
-        if not cfg:
+        mine = self.server_bound_ports(info)
+        if not mine:
             return None
-        cfg.load()
-        my_port = cfg.get_int("server-port", 25565)
         for sid, other in self._servers.items():
             if sid == server_id:
                 continue
             proc = self._processes.get(sid)
             if not proc or not proc.is_running:
                 continue
-            try:
-                other_cfg = self.get_config(sid)
-                if not other_cfg:
-                    continue
-                other_cfg.load()
-                other_port = other_cfg.get_int("server-port", 25565)
-                if other_port == my_port:
-                    return my_port
-            except Exception:
-                pass
+            clash = mine & self.server_bound_ports(other)
+            if clash:
+                return min(clash)
         return None
 
     def begin_mod_operation(self, server_id: str) -> None:
@@ -1949,31 +1976,6 @@ class ServerManager(EventEmitter):
 
         return EDITION_JAVA, source.loader_type if source else LOADER_FABRIC
 
-    def _next_free_port(self, edition: str) -> int:
-        """Pick a listening port no existing server already claims.
-
-        A clone starts out on its source server's port, so without this the original
-        and the copy could never run side by side.
-        """
-        bedrock = is_bedrock(edition)
-        taken: set[int] = set()
-
-        for other in self._servers.values():
-            other_default = BEDROCK_DEFAULT_PORT if is_bedrock(other.edition) else 25565
-            try:
-                cfg = ConfigManager(other.server_dir)
-                cfg.load()
-                taken.add(cfg.get_int("server-port", other_default))
-            except Exception:
-                continue
-
-        # Bedrock also binds port + 1 for IPv6, so its ports have to move in pairs.
-        step = 2 if bedrock else 1
-        port = BEDROCK_DEFAULT_PORT if bedrock else 25565
-        while port in taken and port + step <= 65535:
-            port += step
-        return port
-
     def create_server_from_backup(
         self,
         name: str,
@@ -1981,6 +1983,7 @@ class ServerManager(EventEmitter):
         ram_mb: int = DEFAULT_RAM_MB,
         source_server_id: str = "",
         progress_callback=None,
+        port: int | None = None,
     ) -> tuple[bool, str, ServerInfo | None]:
         """Build a brand-new server out of a full backup, with no download needed."""
 
@@ -2050,10 +2053,12 @@ class ServerManager(EventEmitter):
         try:
             cfg = ConfigManager(info.server_dir)
             cfg.load()
-            port = self._next_free_port(edition)
-            cfg.set_value("server-port", port)
+            # A clone arrives on its source server's port, so a port of its own is what
+            # lets the original and the copy run side by side.
+            chosen_port = port or self.get_next_available_port(edition, exclude_server_id=info.id)
+            cfg.set_value("server-port", chosen_port)
             if is_bedrock(edition):
-                cfg.set_value("server-portv6", port + 1)
+                cfg.set_value("server-portv6", chosen_port + 1)
                 cfg.set_value("server-name", name)
             cfg.save()
             if not is_bedrock(edition):

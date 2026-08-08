@@ -30,12 +30,15 @@ from niksnaks_hosting.shared.utils.constants import (
     LOADER_FABRIC,
     LOADER_FORGE,
     MAX_RAM_MB,
+    MAX_SERVER_PORT,
     MIN_RAM_MB,
+    MIN_SERVER_PORT,
     SUPPORTED_EDITIONS,
     SUPPORTED_LOADERS,
     get_edition_display_name,
     get_loader_display_name,
     get_required_java_version,
+    is_bedrock,
     normalize_loader,
 )
 from niksnaks_hosting.shared.utils.image_utils import convert_to_png
@@ -83,6 +86,9 @@ class CreateServerDialog(Adw.Dialog):
         self._loader_fetch_key: tuple[str, str] = ("", "")
         self._icon_source_path: str = ""
         self._world_import_source_path: str = ""
+        # Once the user picks a port themselves, the edition's default stops overwriting it.
+        self._port_edited: bool = False
+        self._suppress_port_change: bool = False
         # label, archive path, id of the server it came from ("" when browsed off disk)
         self._backup_choices: list[tuple[str, Path, str]] = []
         self._backup_edition: str = EDITION_JAVA
@@ -342,6 +348,26 @@ class CreateServerDialog(Adw.Dialog):
 
         page.add(resources_group)
 
+        self._network_group = Adw.PreferencesGroup(
+            title=_("Network"),
+        )
+
+        port_adj = Gtk.Adjustment(
+            value=self._server_manager.get_next_available_port(),
+            lower=MIN_SERVER_PORT,
+            upper=MAX_SERVER_PORT,
+            step_increment=1,
+            page_increment=10,
+        )
+        self._port_row = Adw.SpinRow(
+            title=_("Port"),
+            adjustment=port_adj,
+        )
+        self._port_row.connect("notify::value", self._on_port_changed)
+        self._network_group.add(self._port_row)
+
+        page.add(self._network_group)
+
         self._mods_group = Adw.PreferencesGroup(
             title=_("Optional setup"),
         )
@@ -402,6 +428,52 @@ class CreateServerDialog(Adw.Dialog):
     def _is_bedrock(self) -> bool:
         return self._selected_edition() == EDITION_BEDROCK
 
+    def _effective_edition(self) -> str:
+        """The edition the new server will end up being.
+
+        A backup carries its own edition, so the archive decides rather than the combo.
+        """
+        if self._using_backup():
+            return self._backup_edition
+        return self._selected_edition()
+
+    def _selected_port(self) -> int:
+        return int(self._port_row.get_value())
+
+    def _port_conflict(self) -> str | None:
+        return self._server_manager.find_port_conflict(self._selected_port(), self._effective_edition())
+
+    def _on_port_changed(self, *_args) -> None:
+        if self._suppress_port_change:
+            return
+        self._port_edited = True
+        self._refresh_port_row()
+        self._validate()
+
+    def _refresh_port_defaults(self) -> None:
+        """Move an untouched port onto the first one free for the chosen edition."""
+        if not self._port_edited:
+            self._suppress_port_change = True
+            self._port_row.set_value(float(self._server_manager.get_next_available_port(self._effective_edition())))
+            self._suppress_port_change = False
+        self._refresh_port_row()
+
+    def _refresh_port_row(self) -> None:
+        port = self._selected_port()
+        conflict = self._port_conflict()
+
+        if conflict:
+            self._port_row.add_css_class("error")
+            self._port_row.set_subtitle(_('Already used by "{}". Pick another port.').format(conflict))
+            return
+
+        self._port_row.remove_css_class("error")
+        if is_bedrock(self._effective_edition()):
+            # Bedrock Dedicated Server takes the next port up for IPv6 as well.
+            self._port_row.set_subtitle(_("Players connect on this port; {} is used for IPv6").format(port + 1))
+        else:
+            self._port_row.set_subtitle(_("Players connect on this port. Each server needs its own."))
+
     def _selected_loader_version(self) -> str:
         return selected_loader_version(self._loader_version_row, self._loader_options)
 
@@ -448,6 +520,10 @@ class CreateServerDialog(Adw.Dialog):
         difficulties = list(DIFFICULTIES) if bedrock else list(DIFFICULTY_MODES)
         gamemodes = list(BEDROCK_GAMEMODES) if bedrock else list(GAMEMODES)
         self._set_world_default_options(difficulties, gamemodes)
+
+        # Java and Bedrock start from different default ports, so the suggestion follows
+        # whichever edition the new server will be.
+        self._refresh_port_defaults()
 
         self._apply_backup_mode()
 
@@ -833,7 +909,10 @@ class CreateServerDialog(Adw.Dialog):
             self._cancel_btn.set_sensitive(True)
             self._create_btn.set_label(_("Create"))
             # A backup brings its own server files, so no version has to be resolved first.
-            self._create_btn.set_sensitive(bool(name) and (self._using_backup() or has_versions))
+            ready = bool(name) and (self._using_backup() or has_versions)
+            # Two servers on one port means the second one never starts, so creating on a
+            # taken port is refused rather than left to fail later.
+            self._create_btn.set_sensitive(ready and self._port_conflict() is None)
             return
 
         self._cancel_btn.set_label(_("Cancel"))
@@ -855,6 +934,7 @@ class CreateServerDialog(Adw.Dialog):
             return
 
         name = self._name_entry.get_text().strip()
+        port = self._selected_port()
 
         if self._using_backup():
             chosen = self._selected_backup()
@@ -873,6 +953,7 @@ class CreateServerDialog(Adw.Dialog):
                     chosen[1],
                     int(self._ram_row.get_value()),
                     self._icon_source_path,
+                    port,
                 ),
                 daemon=True,
             ).start()
@@ -917,6 +998,7 @@ class CreateServerDialog(Adw.Dialog):
                     gamemode,
                     self._icon_source_path,
                     self._world_import_source_path,
+                    port,
                 ),
                 daemon=True,
             ).start()
@@ -959,12 +1041,13 @@ class CreateServerDialog(Adw.Dialog):
                 self._icon_source_path,
                 self._world_import_source_path,
                 install_optimisations,
+                port,
             ),
             daemon=True,
         )
         thread.start()
 
-    def _install_from_backup_thread(self, name, archive, source_server_id, ram_mb, icon_source_path):
+    def _install_from_backup_thread(self, name, archive, source_server_id, ram_mb, icon_source_path, port):
 
         try:
             self._update_progress(0.02, _("Restoring from backup..."), Path(archive).name)
@@ -974,6 +1057,7 @@ class CreateServerDialog(Adw.Dialog):
                 ram_mb=ram_mb,
                 source_server_id=source_server_id,
                 progress_callback=lambda frac, text: self._update_progress(0.02 + frac * 0.90, text, ""),
+                port=port,
             )
             if not success or not server_info:
                 self._show_error(result)
@@ -994,7 +1078,7 @@ class CreateServerDialog(Adw.Dialog):
             self._show_error(_("Unexpected error: {}").format(e))
 
     def _install_bedrock_thread(
-        self, name, option, ram_mb, seed, difficulty, gamemode, icon_source_path, world_import_source_path
+        self, name, option, ram_mb, seed, difficulty, gamemode, icon_source_path, world_import_source_path, port
     ):
 
         try:
@@ -1027,6 +1111,9 @@ class CreateServerDialog(Adw.Dialog):
             config.set_value("difficulty", difficulty)
             config.set_value("gamemode", gamemode)
             config.set_value("level-seed", seed)
+            # Bedrock listens on the chosen port for IPv4 and the next one up for IPv6.
+            config.set_value("server-port", port)
+            config.set_value("server-portv6", port + 1)
             config.save()
 
             # After the config, so the world lands under the level-name the server will load.
@@ -1070,6 +1157,7 @@ class CreateServerDialog(Adw.Dialog):
         icon_source_path,
         world_import_source_path,
         install_optimisations,
+        port,
     ):
 
         try:
@@ -1199,9 +1287,9 @@ class CreateServerDialog(Adw.Dialog):
             config.set_value("gamemode", gamemode)
             config.set_value("level-type", level_type)
             config.set_value("level-seed", seed)
+            config.set_value("server-port", port)
             config.save()
             config.set_eula(True)
-            self._server_manager.set_server_port(server_info.id, 25565)
 
             if world_import_source_path:
                 self._update_progress(0.90, _("Importing world..."), "")

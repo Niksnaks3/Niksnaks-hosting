@@ -332,15 +332,22 @@ class ServerDetailView(Gtk.Box):
                         return f'"{cinfo.name}"'
         return _("another server")
 
-    def _show_port_conflict_dialog(self, port_type: str, port: int):
+    def _show_port_conflict_dialog(self, port_type: str, port: int, own_port: bool = False):
         conflict_name = self._find_conflicting_server_name_for_port(port_type, port)
-        dialog = Adw.AlertDialog.new(
-            _("{} Port In Use").format(port_type),
-            _(
-                "{} port {} is already in use by {}. A server is already running on this port.\n\n"
+        # The server's own listening port lives in server.properties; the Bedrock and voice
+        # chat ports belong to the tunnels, which are edited where the tunnels are managed.
+        if own_port:
+            where = _("To change the port, open the Properties tab and edit the port under Network.")
+        else:
+            where = _(
                 "To change the port, open the {} tunnel management dialog "
                 "in Connect view and edit the local port."
-            ).format(port_type, port, conflict_name, port_type),
+            ).format(port_type)
+        dialog = Adw.AlertDialog.new(
+            _("{} Port In Use").format(port_type),
+            _("{} port {} is already in use by {}. A server is already running on this port.\n\n{}").format(
+                port_type, port, conflict_name, where
+            ),
         )
         dialog.add_response("ok", _("OK"))
         dialog.set_default_response("ok")
@@ -371,7 +378,9 @@ class ServerDetailView(Gtk.Box):
 
                 conflict_port = self._server_manager.check_port_conflict(self._current_server.id)
                 if conflict_port is not None:
-                    self._show_port_conflict_dialog("Bedrock" if bedrock else "Java", conflict_port)
+                    self._show_port_conflict_dialog(
+                        "Bedrock" if bedrock else "Java", conflict_port, own_port=True
+                    )
                     return
 
                 if not bedrock:

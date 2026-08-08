@@ -15,6 +15,7 @@ from niksnaks_hosting.shared.utils.constants import (
     APP_VERSION,
     LOADER_FABRIC,
     LOADER_FORGE,
+    is_pack_protected_icon,
     normalize_loader,
 )
 from niksnaks_hosting.shared.utils.net import make_ssl_context
@@ -442,6 +443,11 @@ def _extract_archive(
             if leaf in PROTECTED_FILES and target.parent.resolve() == server_root.resolve():
                 if leaf == "server.properties" and target.is_file():
                     _merge_server_properties(server_root, zf.read(zinfo))
+                continue
+
+            # The server's picture belongs to whoever set it, and a pack does not get
+            # to replace one the user chose.
+            if is_pack_protected_icon(server_root, target):
                 continue
 
             target.parent.mkdir(parents=True, exist_ok=True)

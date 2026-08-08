@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from niksnaks_hosting.shared.utils.constants import APP_VERSION
+from niksnaks_hosting.shared.utils.constants import APP_VERSION, is_pack_protected_icon
 from niksnaks_hosting.shared.utils.net import make_ssl_context
 
 USER_AGENT = f"Niksnaks-Hosting/{APP_VERSION}"
@@ -442,7 +442,7 @@ def install_modpack(
                 continue
 
             target = _safe_target(server_root, rel_path)
-            if not target:
+            if not target or is_pack_protected_icon(server_root, target):
                 continue
 
             download_entries.append((rel_path, dl_url, entry))
@@ -482,6 +482,11 @@ def install_modpack(
 
                 target = _safe_target(server_root, rel)
                 if not target:
+                    continue
+
+                # The server's picture belongs to whoever set it, and a pack does not
+                # get to replace one the user chose.
+                if is_pack_protected_icon(server_root, target):
                     continue
 
                 target.parent.mkdir(parents=True, exist_ok=True)

@@ -23,12 +23,16 @@ from niksnaks_hosting.shared.utils.constants import (
     BEDROCK_GAMEMODES,
     BEDROCK_PERMISSION_LEVELS,
     DEFAULT_RAM_MB,
+    DEFAULT_SERVER_PORT,
     DEFAULT_SERVER_PROPERTIES,
     DIFFICULTIES,
     GAMEMODES,
     LOADER_FORGE,
     MAX_RAM_MB,
+    MAX_SERVER_PORT,
     MIN_RAM_MB,
+    MIN_SERVER_PORT,
+    default_port_for_edition,
     get_edition_display_name,
     get_loader_display_name,
     get_required_java_version,
@@ -53,6 +57,8 @@ class PropertiesView(Gtk.Box):
         self._bedrock_only_widgets: list[Gtk.Widget] = []
         self._ram_row: Adw.SpinRow | None = None
         self._suppress_changes = False
+        # The port as it stands on disk, so only a change to it is worth warning about.
+        self._saved_port = 0
         self._app_toast_overlay = toast_overlay
 
         self._banner = Adw.Banner()
@@ -158,6 +164,10 @@ class PropertiesView(Gtk.Box):
 
         network = Adw.PreferencesGroup(title=_("Network"))
 
+        self._java_widgets["server-port"] = self._add_spin_row(
+            network, _("Port"), "server-port", MIN_SERVER_PORT, MAX_SERVER_PORT, DEFAULT_SERVER_PORT
+        )
+        self._java_widgets["server-port"].set_subtitle(_("Players connect on this port. Each server needs its own."))
         self._java_widgets["enable-query"] = self._add_switch_row(network, _("Enable Query"), "enable-query", False, "")
 
         page.add(network)
@@ -1031,7 +1041,28 @@ class PropertiesView(Gtk.Box):
                     except ValueError:
                         widget.set_selected(0)
 
+        self._saved_port = self._config.get_int("server-port", self._default_port())
+
         self._suppress_changes = False
+
+    def _default_port(self) -> int:
+        return default_port_for_edition(self._server_info.edition if self._server_info else None)
+
+    def _warn_on_port_conflict(self) -> None:
+        """A port another server holds means only one of the two will ever start."""
+        if not self._config or not self._server_manager or not self._server_info:
+            return
+
+        port = self._config.get_int("server-port", self._default_port())
+        if port == self._saved_port:
+            return
+        self._saved_port = port
+
+        owner = self._server_manager.find_port_conflict(
+            port, self._server_info.edition, exclude_server_id=self._server_info.id
+        )
+        if owner:
+            self._show_toast(_('Port {} is also used by "{}"').format(port, owner), timeout=4)
 
     def _on_widget_changed(self, *_args):
         if self._suppress_changes:
@@ -1099,6 +1130,7 @@ class PropertiesView(Gtk.Box):
                     self._config.set_value(key, val)
 
         self._config.save()
+        self._warn_on_port_conflict()
         running = False
         if self._server_manager and self._server_info and self._ram_row:
             ram_mb = int(self._ram_row.get_value())

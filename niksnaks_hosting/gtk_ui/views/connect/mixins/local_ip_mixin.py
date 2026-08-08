@@ -9,7 +9,7 @@ gi.require_version("Adw", "1")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Adw, Gdk, Gtk
 
-from niksnaks_hosting.shared.utils.constants import is_bedrock
+from niksnaks_hosting.shared.utils.constants import DEFAULT_SERVER_PORT, is_bedrock
 
 PLAYIT_DASHBOARD_URL = "https://playit.gg/account/tunnels"
 
@@ -63,13 +63,17 @@ class LocalIpMixin:
         """Port LAN players must type in, or None when the client's default is right.
 
         Bedrock clients always ask for a port, and the Bedrock default (19132) differs
-        from the Java one, so spell it out rather than leaving players to guess.
+        from the Java one, so spell it out rather than leaving players to guess. A Java
+        server needs it named too once it has been moved off the port clients assume.
         """
         server_info = getattr(self, "_server_info", None)
         manager = getattr(self, "_server_manager", None)
-        if not server_info or not manager or not is_bedrock(server_info.edition):
+        if not server_info or not manager:
             return None
-        return manager.playit_manager._read_server_port(str(server_info.server_dir))
+        port = manager.playit_manager._read_server_port(str(server_info.server_dir))
+        if is_bedrock(server_info.edition):
+            return port
+        return port if port != DEFAULT_SERVER_PORT else None
 
     def _refresh_local_ip_row(self):
         ip = self._get_local_ip()
@@ -85,6 +89,14 @@ class LocalIpMixin:
         if not ip or ip == not_available:
             self._toast(_("Local IP not available"))
             return
+
+        # A moved Java server needs host:port in the one address field the client offers;
+        # Bedrock has a separate port field, so its address stays the bare IP.
+        server_info = getattr(self, "_server_info", None)
+        port = self._local_connect_port()
+        if port and server_info and not is_bedrock(server_info.edition):
+            ip = f"{ip}:{port}"
+
         try:
             display = Gdk.Display.get_default()
             if display:

@@ -180,6 +180,40 @@ def get_required_java_version(mc_version: str) -> int:
 
     return DEFAULT_JAVA_VERSION
 
+# A server folder holds two pictures: icon.png, the app's own copy that the sidebar
+# draws, and server-icon.png, the one Minecraft shows in the multiplayer list. Both are
+# written from the picture the user picks, so a modpack is not free to paint over them.
+USER_ICON_FILE = "icon.png"
+MINECRAFT_ICON_FILE = "server-icon.png"
+ICON_FILES = frozenset({USER_ICON_FILE, MINECRAFT_ICON_FILE})
+
+def has_user_server_icon(server_dir: Path | str) -> bool:
+    # Only the icon picker and the create dialog write icon.png, and no modpack is
+    # allowed to, so the file being there means the user picked a picture.
+    return (Path(server_dir) / USER_ICON_FILE).is_file()
+
+def is_pack_protected_icon(server_dir: Path | str, target: Path) -> bool:
+    # icon.png is the app's alone. A pack may still give a server its picture through
+    # server-icon.png, but only while the user has not chosen one of their own.
+    leaf = target.name.lower()
+    if leaf not in ICON_FILES or target.parent.resolve() != Path(server_dir).resolve():
+        return False
+    return leaf != MINECRAFT_ICON_FILE or has_user_server_icon(server_dir)
+
+# Only one server can listen on a port at a time, so hosting several side by side means
+# giving each its own. Java Edition binds a single TCP port; Bedrock binds server-port for
+# IPv4 and server-portv6 right after it, so Bedrock ports move in pairs.
+DEFAULT_SERVER_PORT = 25565
+MIN_SERVER_PORT = 1024
+MAX_SERVER_PORT = 65535
+
+def default_port_for_edition(edition: str | None) -> int:
+    return BEDROCK_DEFAULT_PORT if is_bedrock(edition) else DEFAULT_SERVER_PORT
+
+def ports_bound_by(port: int, edition: str | None) -> set[int]:
+    """Every port a server on *port* occupies once it starts."""
+    return {port, port + 1} if is_bedrock(edition) else {port}
+
 DEFAULT_SERVER_PROPERTIES = {
     "motd": "a Niksnaks-Hosting server",
     "max-players": "20",
@@ -191,7 +225,7 @@ DEFAULT_SERVER_PROPERTIES = {
     "allow-flight": "false",
     "view-distance": "10",
     "simulation-distance": "10",
-    "server-port": "25565",
+    "server-port": str(DEFAULT_SERVER_PORT),
     "level-seed": "",
     "level-type": "minecraft\\:normal",
     "spawn-protection": "16",
