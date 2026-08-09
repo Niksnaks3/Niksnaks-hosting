@@ -13,6 +13,7 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Adw, GLib, Gtk
 
+from niksnaks_hosting.gtk_ui.dialogs.progress_dialog import ProgressDialog
 from niksnaks_hosting.shared.backend.server_manager import (
     FULL_BACKUP_PREFIXES,
     ServerManager,
@@ -304,12 +305,24 @@ class BackupsMixin:
         server_id = self._server_info.id
         server_manager = self._server_manager
 
-        self._toast(_("Restoring {}...").format(zp.name))
+        # A restore unpacks the archive and then copies a world into place, which runs
+        # long enough on a big world that a toast alone looks like nothing is happening.
+        progress = ProgressDialog(
+            _("Restoring backup"),
+            detail=zp.name,
+            icon_name="document-revert-symbolic",
+        )
+        progress.present(self.get_root())
 
         def worker():
-            ok, msg = server_manager.restore_world_backup(server_id, zp)
+            ok, msg = server_manager.restore_world_backup(
+                server_id,
+                zp,
+                progress_callback=lambda fraction, message: progress.update(fraction, detail=message),
+            )
 
             def done():
+                progress.finish()
                 self._backup_busy = False
                 if ok:
                     self._rebuild_lists()

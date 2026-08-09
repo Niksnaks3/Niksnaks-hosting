@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 import gi
 
@@ -11,6 +12,7 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Adw, Gdk, GdkPixbuf, GLib, Gtk, Pango
 
 from ..utils import *
+from niksnaks_hosting.gtk_ui.dialogs.progress_dialog import ProgressDialog
 from niksnaks_hosting.shared.utils.constants import LOADER_FABRIC, get_loader_display_name, normalize_loader
 
 class ModrinthMixin:
@@ -727,8 +729,16 @@ class ModrinthMixin:
                     b.set_sensitive(sensitive)
 
         if is_datapack:
+            dp_progress_slot: list[ProgressDialog | None] = [None]
+
+            def _finish_dp_progress():
+                dialog = dp_progress_slot[0]
+                dp_progress_slot[0] = None
+                if dialog:
+                    dialog.finish()
 
             def ui_ok_dp(fname: str, dep_count: int):
+                _finish_dp_progress()
                 _set_btns(_("Installed"), False)
                 self._record_datapack_install(
                     hit.project_id,
@@ -744,11 +754,31 @@ class ModrinthMixin:
                 self._rebuild_lists()
 
             def ui_err_dp(msg: str):
+                _finish_dp_progress()
                 _set_btns(_("Install"), True)
                 self._end_mod_operation(op_token)
                 self._alert(_("Install failed"), msg)
 
             def install_dp_thread(deps_to_install: list):
+                progress = dp_progress_slot[0]
+                total_files = len(deps_to_install) + 1
+
+                def report_file(index: int, name: str):
+                    def on_bytes(done: int, size: int) -> None:
+                        if not progress:
+                            return
+                        share = (done / size) if size else 0.0
+                        progress.update(
+                            (index + share) / total_files,
+                            detail=(
+                                _("{name} — {n} of {total}").format(name=name, n=index + 1, total=total_files)
+                                if total_files > 1
+                                else name
+                            ),
+                        )
+
+                    return on_bytes
+
                 try:
                     root = self._server_dir()
                     if not root:
@@ -759,9 +789,13 @@ class ModrinthMixin:
                     dp_dir.mkdir(parents=True, exist_ok=True)
 
                     installed_dep_count = 0
-                    for dep in deps_to_install:
+                    for position, dep in enumerate(deps_to_install):
                         dep_dest = dp_dir / dep.filename
-                        modrinth_client.download_to(dep.download_url, dep_dest)
+                        modrinth_client.download_to(
+                            dep.download_url,
+                            dep_dest,
+                            on_bytes=report_file(position, dep.filename),
+                        )
                         self._record_datapack_install(
                             dep.project_id,
                             dep.name or dep.filename,
@@ -772,14 +806,22 @@ class ModrinthMixin:
                         installed_dep_count += 1
 
                     dest = dp_dir / chosen.filename
-                    modrinth_client.download_to(chosen.download_url, dest)
+                    modrinth_client.download_to(
+                        chosen.download_url,
+                        dest,
+                        on_bytes=report_file(len(deps_to_install), chosen.filename),
+                    )
                     GLib.idle_add(lambda f=chosen.filename, c=installed_dep_count: ui_ok_dp(f, c))
                 except Exception as e:
                     GLib.idle_add(lambda m=str(e): ui_err_dp(m))
 
+            def start_dp_download(deps_to_install: list):
+                dp_progress_slot[0] = self._show_install_progress(hit.title, chosen.filename)
+                threading.Thread(target=install_dp_thread, args=(deps_to_install,), daemon=True).start()
+
             def prompt_dp_dependencies(deps_to_install: list):
                 if not deps_to_install:
-                    threading.Thread(target=install_dp_thread, args=([],), daemon=True).start()
+                    start_dp_download([])
                     return
 
                 dep_names = [d.filename for d in deps_to_install]
@@ -803,7 +845,7 @@ class ModrinthMixin:
 
                 def on_response(_d, response):
                     if response == "install":
-                        threading.Thread(target=install_dp_thread, args=(deps_to_install,), daemon=True).start()
+                        start_dp_download(deps_to_install)
                     else:
                         _set_btns(_("Install"), True)
                         self._end_mod_operation(op_token)
@@ -838,8 +880,10 @@ class ModrinthMixin:
 
         if is_modpack:
             _set_btns(_("Installing..."))
+            pack_progress = self._show_install_progress(hit.title, _("Downloading modpack..."))
 
             def ui_ok_pack(downloaded_count: int, override_count: int, managed_mods: list[str]):
+                pack_progress.finish()
                 _set_btns(_("Installed"), False)
                 self._record_modpack_install(
                     hit.project_id,
@@ -859,6 +903,7 @@ class ModrinthMixin:
                 self._rebuild_lists()
 
             def ui_err_pack(msg: str):
+                pack_progress.finish()
                 if self._is_modpack_installed(hit.project_id):
                     _set_btns(_("Installed"), False)
                     self._end_mod_operation(op_token)
@@ -882,6 +927,14 @@ class ModrinthMixin:
 
                     def on_pack_progress(d: int, t: int, rel_path: str):
                         GLib.idle_add(lambda dd=d, tt=t: ui_progress_pack(dd, tt))
+                        pack_progress.update(
+                            (d / t) if t else None,
+                            detail=_("{n} of {total} files · {name}").format(
+                                n=d, total=t, name=Path(rel_path).name
+                            )
+                            if rel_path
+                            else _("Reading modpack..."),
+                        )
 
                     result = modrinth_client.install_modpack(
                         chosen.version_id,
@@ -900,7 +953,18 @@ class ModrinthMixin:
             threading.Thread(target=install_pack_thread, daemon=True).start()
             return
 
+        # The bar only exists once downloading starts: the dependency prompt has to be
+        # able to come up on its own, and cancelling it must not leave a bar behind.
+        progress_slot: list[ProgressDialog | None] = [None]
+
+        def _finish_progress():
+            dialog = progress_slot[0]
+            progress_slot[0] = None
+            if dialog:
+                dialog.finish()
+
         def ui_ok(fname: str, dep_count: int):
+            _finish_progress()
             _set_btns(_("Installed"), False)
             self._record_individual_mod_install(
                 hit.project_id,
@@ -918,11 +982,33 @@ class ModrinthMixin:
             self._rebuild_lists()
 
         def ui_err(msg: str):
+            _finish_progress()
             _set_btns(_("Install"), True)
             self._end_mod_operation(op_token)
             self._alert(_("Install failed"), msg)
 
         def thread_fn(deps_to_install: list, all_required_deps: list):
+            progress = progress_slot[0]
+            # Each file gets an equal slice of the bar and fills its own slice by bytes,
+            # so a lone jar still moves instead of sitting at 0% and jumping to done.
+            total_files = len(deps_to_install) + 1
+
+            def report_file(index: int, name: str):
+                def on_bytes(done: int, size: int) -> None:
+                    if not progress:
+                        return
+                    share = (done / size) if size else 0.0
+                    progress.update(
+                        (index + share) / total_files,
+                        detail=(
+                            _("{name} — {n} of {total}").format(name=name, n=index + 1, total=total_files)
+                            if total_files > 1
+                            else name
+                        ),
+                    )
+
+                return on_bytes
+
             try:
                 root = self._server_dir()
                 if not root:
@@ -942,28 +1028,42 @@ class ModrinthMixin:
                         installed_names_local.discard(old_filename.lower())
 
                 installed_dep_count = 0
-                for dep in deps_to_install:
+                for position, dep in enumerate(deps_to_install):
                     dep_name = dep.filename.lower()
                     if dep_name in installed_names_local:
                         continue
                     if dep_name == chosen.filename.lower():
                         continue
                     dep_dest = mods_dir / dep.filename
-                    modrinth_client.download_to(dep.download_url, dep_dest)
+                    modrinth_client.download_to(
+                        dep.download_url,
+                        dep_dest,
+                        on_bytes=report_file(position, dep.filename),
+                    )
                     installed_names_local.add(dep_name)
                     installed_dep_count += 1
 
                 dest = mods_dir / chosen.filename
-                modrinth_client.download_to(chosen.download_url, dest)
+                modrinth_client.download_to(
+                    chosen.download_url,
+                    dest,
+                    on_bytes=report_file(len(deps_to_install), chosen.filename),
+                )
                 self._record_dependency_installs(chosen.filename, all_required_deps)
                 self._configure_known_mod_after_download(hit)
                 GLib.idle_add(lambda f=chosen.filename, c=installed_dep_count: ui_ok(f, c))
             except Exception as e:
                 GLib.idle_add(lambda m=str(e): ui_err(m))
 
+        def start_download(deps_to_install: list, all_required_deps: list):
+            """Open the bar on the main thread, then go and download. Both ways through
+            the dependency prompt arrive here."""
+            progress_slot[0] = self._show_install_progress(hit.title, chosen.filename)
+            threading.Thread(target=thread_fn, args=(deps_to_install, all_required_deps), daemon=True).start()
+
         def prompt_dependencies(deps_to_install: list, all_required_deps: list):
             if not deps_to_install:
-                threading.Thread(target=thread_fn, args=([], all_required_deps), daemon=True).start()
+                start_download([], all_required_deps)
                 return
 
             dep_names = [d.filename for d in deps_to_install]
@@ -985,7 +1085,7 @@ class ModrinthMixin:
 
             def on_response(_d, response):
                 if response == "install":
-                    threading.Thread(target=thread_fn, args=(deps_to_install, all_required_deps), daemon=True).start()
+                    start_download(deps_to_install, all_required_deps)
                 else:
                     _set_btns(_("Install"), True)
                     self._end_mod_operation(op_token)

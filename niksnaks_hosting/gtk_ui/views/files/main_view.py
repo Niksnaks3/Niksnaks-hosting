@@ -14,6 +14,7 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Adw, GLib, Gtk
 
+from niksnaks_hosting.gtk_ui.dialogs.progress_dialog import ProgressDialog
 from niksnaks_hosting.shared.backend.server_manager import ServerInfo, ServerManager
 from niksnaks_hosting.shared.utils.constants import get_loader_display_name, is_bedrock
 
@@ -605,6 +606,20 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
         on_refresh()
         self._toast(_("Deleted {}").format(label), button_label=_("Undo"), on_button=undo_delete, timeout=toast_seconds)
         GLib.timeout_add_seconds(toast_seconds, finalize_delete)
+
+    def _show_install_progress(self, name: str, detail: str = "") -> ProgressDialog:
+        """Put a progress bar on screen for an install and hand it back to the caller.
+
+        Whoever opens one owns finishing it down every path, the failures included: the
+        dialog will not close by itself, so that a half-written mods folder cannot be
+        walked away from mid-download.
+        """
+        dialog = ProgressDialog(
+            _("Installing {}").format(name) if name else _("Installing..."),
+            detail=detail,
+        )
+        dialog.present(self.get_root())
+        return dialog
 
     def _alert(self, title: str, body: str):
         d = Adw.AlertDialog()

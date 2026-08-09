@@ -1,9 +1,11 @@
 import json
+import os
 import re
 import shutil
 import sys
 import uuid
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -65,16 +67,61 @@ def _restore_exec_bits(archive: zipfile.ZipFile, destination: Path) -> None:
         except OSError:
             continue
 
-def _safe_extract_zip(archive: Path, destination: Path) -> None:
-    """Extract *archive* into *destination*, refusing entries that escape it."""
+def _safe_extract_zip(
+    archive: Path,
+    destination: Path,
+    on_progress: Callable[[int, int, str], None] | None = None,
+) -> None:
+    """Extract *archive* into *destination*, refusing entries that escape it.
+
+    With *on_progress* the members come out one at a time so the caller can report
+    (done, total, name); extractall is faster but says nothing while it works, and a
+    world of a few gigabytes takes long enough that silence reads as a hang.
+    """
     destination.mkdir(parents=True, exist_ok=True)
     root = destination.resolve()
     with zipfile.ZipFile(archive, "r") as zf:
-        for entry in zf.infolist():
+        entries = zf.infolist()
+        for entry in entries:
             if not (root / entry.filename).resolve().is_relative_to(root):
                 raise ValueError(_("Archive contains invalid paths."))
-        zf.extractall(root)
+
+        if on_progress is None:
+            zf.extractall(root)
+        else:
+            total = len(entries)
+            for done, entry in enumerate(entries, start=1):
+                zf.extract(entry, root)
+                on_progress(done, total, entry.filename)
+
         _restore_exec_bits(zf, root)
+
+def _copy_tree_with_progress(
+    source: Path,
+    destination: Path,
+    on_file: Callable[[str], None] | None = None,
+) -> None:
+    """Copy a file or a whole directory, announcing each file as it lands.
+
+    shutil.copytree does the same job without the per-file callback, which is what
+    makes a restore look frozen for the minute or two it runs. Descending a level at a
+    time keeps every destination built from its own parent, because a staging path that
+    mixes separators is not something relative_to can be trusted to take apart.
+    """
+    if not source.is_dir():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        if on_file:
+            on_file(source.name)
+        return
+
+    destination.mkdir(parents=True, exist_ok=True)
+    for item in source.iterdir():
+        _copy_tree_with_progress(item, destination / item.name, on_file=on_file)
+
+def _count_files(root: Path) -> int:
+    """Files under *root*, for turning a copy loop into a fraction."""
+    return sum(len(files) for _parent, _subdirs, files in os.walk(root))
 
 @dataclass(frozen=True)
 class FullBackupOption:
@@ -2098,7 +2145,15 @@ class ServerManager(EventEmitter):
                 continue
 
     def restore_world_backup(self, server_id: str, zip_path: Path, progress_callback=None) -> tuple[bool, str]:
-        import shutil
+        """Put a backup back on disk, reporting (fraction, message) as it goes.
+
+        The work splits into reading the archive out to a staging folder and copying that
+        into the server, and both halves are slow enough to be worth showing separately.
+        """
+
+        def report(fraction: float, message: str) -> None:
+            if progress_callback:
+                progress_callback(max(0.0, min(1.0, fraction)), message)
 
         info = self.get_server(server_id)
         if not info:
@@ -2120,18 +2175,32 @@ class ServerManager(EventEmitter):
         try:
             with scratch_dir("niksnaks-hosting-restore-") as td:
                 tmp_root = td.resolve()
-                with zipfile.ZipFile(zip_path, "r") as zf:
-                    for zi in zf.infolist():
-                        candidate = (tmp_root / zi.filename).resolve()
-                        if hasattr(candidate, "is_relative_to") and not candidate.is_relative_to(tmp_root):
-                            return False, _("Backup archive contains invalid paths.")
-                        elif not str(candidate).startswith(str(tmp_root)):
-                            return False, _("Backup archive contains invalid paths.")
-                    zf.extractall(tmp_root)
-                    _restore_exec_bits(zf, tmp_root)
+
+                report(0.01, _("Reading backup..."))
+                _safe_extract_zip(
+                    zip_path,
+                    tmp_root,
+                    on_progress=lambda done, total, name: report(
+                        0.02 + 0.48 * (done / total if total else 1.0),
+                        _("Reading backup... {}/{}").format(done, total),
+                    ),
+                )
+
+                # Copying is the other half of the work, so it needs its own file count
+                # to divide by. The tree was just written, so this walk is cheap.
+                copy_total = 0
+                copied = 0
+
+                def on_copied(_name: str) -> None:
+                    nonlocal copied
+                    copied += 1
+                    report(
+                        0.55 + 0.42 * (copied / copy_total if copy_total else 1.0),
+                        _("Restoring files... {}/{}").format(copied, copy_total),
+                    )
 
                 if is_full:
-
+                    report(0.51, _("Clearing old server files..."))
                     for item in root.iterdir():
                         if item.name in BACKUP_DIR_NAMES:
                             continue
@@ -2140,12 +2209,10 @@ class ServerManager(EventEmitter):
                         else:
                             item.unlink(missing_ok=True)
 
+                    copy_total = _count_files(tmp_root)
+                    report(0.55, _("Restoring files..."))
                     for item in tmp_root.iterdir():
-                        dst = root / item.name
-                        if item.is_dir():
-                            shutil.copytree(item, dst, dirs_exist_ok=True)
-                        else:
-                            shutil.copy2(item, dst)
+                        _copy_tree_with_progress(item, root / item.name, on_file=on_copied)
                 else:
 
                     extracted_worlds = self._iter_world_dirs(tmp_root)
@@ -2155,6 +2222,9 @@ class ServerManager(EventEmitter):
                     bedrock = is_bedrock(info.edition)
                     container = root / BEDROCK_WORLDS_DIR if bedrock else root
                     container.mkdir(parents=True, exist_ok=True)
+
+                    copy_total = sum(_count_files(world) for world in extracted_worlds)
+                    report(0.51, _("Clearing the old world..."))
 
                     level_name = "world"
                     for item in container.iterdir():
@@ -2183,17 +2253,25 @@ class ServerManager(EventEmitter):
                         ):
                             shutil.rmtree(item, ignore_errors=True)
 
+                    report(0.55, _("Restoring world..."))
                     for item in extracted_worlds:
                         # Bedrock worlds keep their own folder name; Java's is always "world".
                         dst = container / item.name if bedrock else root / "world"
                         if dst.is_dir():
                             shutil.rmtree(dst, ignore_errors=True)
-                        shutil.copytree(item, dst, dirs_exist_ok=True)
+                        _copy_tree_with_progress(item, dst, on_file=on_copied)
 
             if not is_full or not self.bedrock_runtime_missing(server_id):
+                report(1.0, _("Restored."))
                 return True, _("Restored.")
 
-            ok, detail = self.repair_bedrock_runtime(server_id, progress_callback=progress_callback)
+            # The runtime download reports 0..1 of its own, so it lands in the tail here
+            # rather than sending the bar back to the start.
+            report(0.97, _("Downloading Bedrock server files..."))
+            ok, detail = self.repair_bedrock_runtime(
+                server_id,
+                progress_callback=lambda frac, text: report(0.97 + frac * 0.03, text),
+            )
             if ok:
                 return True, _("Restored. {}").format(detail)
             return True, _("Restored, but the Bedrock server files could not be installed: {}").format(detail)

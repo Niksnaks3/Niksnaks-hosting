@@ -7,6 +7,7 @@ niksnaks_hosting/gtk_ui/dialogs/icon_picker.py
 niksnaks_hosting/gtk_ui/dialogs/manage_playit_tunnel.py
 niksnaks_hosting/gtk_ui/dialogs/playit_setup.py
 niksnaks_hosting/gtk_ui/dialogs/preferences.py
+niksnaks_hosting/gtk_ui/dialogs/progress_dialog.py
 niksnaks_hosting/gtk_ui/dialogs/shortcuts.py
 niksnaks_hosting/gtk_ui/views/console_view.py
 niksnaks_hosting/gtk_ui/views/connect/main_view.py

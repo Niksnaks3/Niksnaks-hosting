@@ -1,76 +1,136 @@
+<div align="center">
+
+<img src="packaging/linux/com.niksnakshosting.NiksnaksHosting.svg" width="120" alt="Niksnaks-Hosting icon" />
 
 # Niksnaks-Hosting
 
-> Host Minecraft servers on Linux — without the technical hassle.
+### Host your own Minecraft server. No command line required.
 
-Niksnaks-Hosting is a graphical application that simplifies creating and managing
-Minecraft servers. It removes the usual technical barriers by automating the
-installation of server files and handling the required Java runtimes for you, so you
-can focus on playing instead of wrangling the command line.
+Create a Minecraft server in a few clicks — Java or Bedrock, any version — and let the app
+handle the downloads, the Java runtime, the mods, and the backups.
 
-Built with Python and GTK 4 / libadwaita, it fits naturally into the GNOME desktop.
+[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-1.3.0-brightgreen.svg)](https://github.com/Niksnaks3/Niksnaks-hosting/releases)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey.svg)](#-installation)
+[![Python](https://img.shields.io/badge/python-3.13%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![GTK4](https://img.shields.io/badge/GTK-4%20%2F%20libadwaita-4A86CF.svg?logo=gnome&logoColor=white)](https://gtk.org/)
+[![Built with Claude Code](https://img.shields.io/badge/built%20with-Claude%20Code-D97757.svg)](#-development)
 
-## Features
+</div>
 
-- **One-click server setup** — install server files and the matching Java runtime
-  automatically; run multiple servers side by side.
-- **Java or Bedrock** — pick the edition when you create a server. Bedrock servers use
-  Mojang's Dedicated Server build and get the same console, backups, allow list, and
-  properties editor, tuned to Bedrock's own settings.
-- **Version picker** — choose a Minecraft version, then pick any Fabric loader or Forge
-  build published for it, with the recommended one selected by default.
-- **Built-in Modrinth browser** — discover and install mods and modpacks straight from
-  the app.
-- **Playit tunnel support** — host without manual port forwarding and share your local
-  server with friends.
-- **Server console & logs** — watch server output live and send commands.
-- **Performance monitoring** — keep an eye on CPU, memory, and uptime.
-- **Properties editor** — edit `server.properties` through a graphical form.
-- **Backups** — create and restore server backups, with auto-deletion after 30 days.
-- **World files** — manage worlds and import existing ones.
-- **Java control** — pick a Java version and set custom JVM arguments per server.
-- **Offline mode** — run servers in offline mode when you need to.
-- **Internationalization** — ships with English and Polski (Polish), with more welcome.
-  See [CONTRIBUTING.md](CONTRIBUTING.md) to add your language.
+---
 
-## Screenshots
+## ✨ Why Niksnaks-Hosting?
 
-<p float="left">
-  <img src="packaging/linux/screenshots/console.png" width="270" alt="Server console and logs" />
-  <img src="packaging/linux/screenshots/mods.png" width="270" alt="Install and manage mods" />
-  <img src="packaging/linux/screenshots/properties.png" width="270" alt="Edit server properties" />
-</p>
-<p float="left">
-  <img src="packaging/linux/screenshots/performance.png" width="270" alt="Monitor server performance" />
-  <img src="packaging/linux/screenshots/backups.png" width="270" alt="Create and restore backups" />
-  <img src="packaging/linux/screenshots/files.png" width="270" alt="Manage world files and backups" />
-</p>
+Running a Minecraft server normally means hunting down the right server `.jar`, installing
+a matching Java version, editing config files by hand, and remembering which port you used.
+Niksnaks-Hosting does all of that for you behind a native GNOME-style interface — and keeps
+going once the server is up, with a live console, mod browsers, backups, and performance
+graphs in the same window.
 
-## Requirements
+## 📸 Screenshots
 
-- Python **3.13** or newer
-- GTK 4, libadwaita, and PyGObject
-- Java runtime(s) — managed by the app on a per-server basis
-- Python dependencies: `requests`, `psutil`, `Pillow`
+<div align="center">
 
-## Installation
+| Console & logs | Install mods | Server properties |
+| :---: | :---: | :---: |
+| <img src="packaging/linux/screenshots/console.png" width="260" alt="Server console and logs" /> | <img src="packaging/linux/screenshots/mods.png" width="260" alt="Install and manage mods" /> | <img src="packaging/linux/screenshots/properties.png" width="260" alt="Edit server properties" /> |
 
-### Flatpak (recommended on Linux)
+| Performance | Backups | Connect |
+| :---: | :---: | :---: |
+| <img src="packaging/linux/screenshots/performance.png" width="260" alt="Monitor server performance" /> | <img src="packaging/linux/screenshots/backups.png" width="260" alt="Create and restore backups" /> | <img src="packaging/linux/screenshots/connect.png" width="260" alt="Share your server" /> |
 
-The easiest way to get Niksnaks-Hosting on Linux is the Flatpak bundle. Build it from
-source with the included helper script:
+</div>
+
+## 🚀 Features
+
+### Getting a server running
+
+- **One-click setup** — the app downloads the server files and the matching Java runtime for
+  you. Nothing to install by hand.
+- **Java or Bedrock** — pick the edition when you create the server. Bedrock uses Mojang's
+  Bedrock Dedicated Server and gets the same console, backups, allow list, and properties
+  editor, tuned to Bedrock's own settings.
+- **Version & loader picker** — choose a Minecraft version, then any **Fabric** or **Forge**
+  build published for it, with the recommended one preselected.
+- **Choose your port** — every server gets its own port, so you can run several side by side.
+  The app suggests the next free one and warns you before two servers collide.
+- **Optional performance mods** — flip one switch at creation time to install compatible
+  optimisation mods.
+- **Start from a backup** — build a brand-new server straight out of a full backup, which
+  doubles as a way to clone an existing one.
+
+### Mods, modpacks & worlds
+
+- **Modrinth browser** — search, filter, and install mods, modpacks, and datapacks from
+  inside the app, with required dependencies resolved and installed for you.
+- **CurseForge modpacks** — install packs from CurseForge, preferring the author's server
+  pack when one was published.
+- **One-click updates** — check every installed mod, modpack, and datapack for newer builds
+  and apply them together.
+- **Progress you can see** — installs and restores show a real progress bar with per-file
+  detail, so you always know how far along a long download is.
+- **World management** — import existing worlds, browse world files, and read the seed.
+- **Mod helpers** — Geyser, Floodgate, and Simple Voice Chat get configured automatically
+  when you install them.
+
+### Running & sharing
+
+- **Live console** — watch server output as it happens and send commands straight back.
+- **Performance monitoring** — CPU, memory, and uptime at a glance.
+- **Properties editor** — edit `server.properties` through a proper form instead of a text
+  file, with comments and unknown keys preserved.
+- **Players** — manage the whitelist and ban list (Bedrock's allow list included).
+- **Playit.gg tunnels** — share your server with friends without touching your router.
+- **Backups** — world-only or full-server backups, restore from any of them, and optional
+  auto-cleanup of ones older than 30 days.
+- **Per-server Java control** — pick a Java version and set custom JVM arguments.
+
+### Polish
+
+- **Server icons** — give each server its own picture.
+- **Keyboard shortcuts** — listed in the in-app **Shortcuts** dialog.
+- **Translations** — ships with English and Polski (Polish). More are very welcome; see
+  [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## 📦 Installation
+
+### Windows
+
+Grab the installer from the [Releases page](https://github.com/Niksnaks3/Niksnaks-hosting/releases)
+and run it:
+
+```
+Niksnaks-Hosting-<version>-Setup.exe
+```
+
+<details>
+<summary>Building the Windows installer yourself</summary>
+
+Windows builds are frozen with **PyInstaller** and packaged with **Inno Setup 6**. GTK4,
+libadwaita, and PyGObject must all come from the same Python environment — the **MSYS2
+UCRT64** shell is the supported one.
+
+```bash
+./packaging/windows/build.sh
+```
+
+The finished installer lands in `dist/`.
+
+</details>
+
+### Linux — Flatpak (recommended)
 
 ```bash
 ./packaging/flatpak/build.sh
 flatpak install --user dist/Niksnaks-Hosting-*.flatpak
 ```
 
-This pulls in the GNOME runtime and required Python modules, then produces a bundle in
+This pulls in the GNOME runtime and the required Python modules, then produces a bundle in
 `dist/`.
 
-### Build from source (Meson)
-
-Niksnaks-Hosting uses Meson as its build system:
+<details>
+<summary>Linux — build from source with Meson</summary>
 
 ```bash
 meson setup build
@@ -78,14 +138,10 @@ ninja -C build
 meson install -C build      # installs to the configured prefix
 ```
 
-This installs the `niksnaks-hosting` command, the desktop entry, icons, metainfo, and
+That installs the `niksnaks-hosting` command, the desktop entry, icons, metainfo, and
 compiled translations.
 
-### Windows
-
-A frozen Windows build is supported via PyInstaller. On Windows, GTK4/libadwaita and
-PyGObject must come from the same Python environment (MSYS2 UCRT64 or Conda). The app
-auto-detects the bundled GTK/GObject runtime at launch.
+</details>
 
 ### Run from source (development)
 
@@ -94,54 +150,68 @@ pip install requests psutil pillow
 python niksnaks_hosting.py
 ```
 
-> On Windows, run it with the Python that has GTK4/libadwaita and PyGObject installed.
+> [!NOTE]
+> On Windows, use the Python that has GTK4, libadwaita, and PyGObject available — the MSYS2
+> UCRT64 environment. The app auto-detects a bundled GTK/GObject runtime in frozen builds.
 
-## Usage
+### Requirements
 
-Launch **Niksnaks-Hosting** from your application menu, or run `niksnaks-hosting` from a
-terminal. Create a new server, choose Java or Bedrock Edition, pick a version, and the app
-handles the rest — downloading files, setting up Java, and starting the server. From there
-you can install mods from Modrinth, configure a Playit tunnel, watch the console, tweak
-properties, and take backups.
+| | |
+| --- | --- |
+| **Python** | 3.13 or newer |
+| **UI toolkit** | GTK 4, libadwaita, PyGObject |
+| **Python packages** | `requests`, `psutil`, `Pillow` |
+| **Java** | downloaded and managed by the app, per server |
 
-Bedrock servers run Mojang's Bedrock Dedicated Server, which is a native binary rather than
-a Java program: there is no loader, no heap size, and no Modrinth mods, and the app hides
-those options accordingly. Bedrock players connect over UDP on the server's own port
-(19132 by default), which the Connect view spells out next to your local IP.
+## 🎮 Getting started
 
-Keyboard shortcuts are listed under the in-app **Shortcuts** dialog.
+Launch **Niksnaks-Hosting** from your application menu, or run `niksnaks-hosting` in a
+terminal.
 
-## Translations
+1. Click **Create Server**.
+2. Choose **Java** or **Bedrock**, then a Minecraft version and loader.
+3. Pick a port, or accept the free one the app suggests.
+4. Press **Create** — the app downloads everything and tells you when the server is ready.
 
-Niksnaks-Hosting uses Python's standard `gettext` for i18n; translatable strings are
-marked with `_("...")` in the source. To add or update a translation, follow the steps in
-[CONTRIBUTING.md](CONTRIBUTING.md) (generate the `.pot`, create/update a `.po`, add your
-locale to `po/LINGUAS`, and submit it with your patch).
+From there: install mods from Modrinth or CurseForge, set up a Playit tunnel, watch the
+console, edit properties, and take backups.
 
-## Contributing
+> [!TIP]
+> **Bedrock is not Java.** Bedrock servers run Mojang's native Bedrock Dedicated Server, so
+> there is no loader, no heap size, and no Modrinth mods — the app hides those options for
+> you. Bedrock players connect over **UDP**, using the server's own port (19132 by default)
+> plus the next port up for IPv6. The **Connect** view spells out the exact address.
 
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow,
-lint/type-check expectations, and translation instructions before opening a patch.
+## 🛠 Development
 
-When developing, the project is checked with **Ruff** (line length 120, targeting
-`py313`) and **mypy**.
+### Tooling
 
-## License
+The project is checked with **Ruff** (line length 120, targeting `py313`) and **mypy**.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and expectations before opening
+a patch.
 
-Niksnaks-Hosting is free software licensed under the **GPL-3.0-or-later** license. See
-[LICENSE](LICENSE) for the full text.
+### Built with the help of Claude Code
 
-## Project layout
+Parts of this project were developed with [**Claude Code**](https://claude.com/claude-code),
+Anthropic's agentic coding tool, used as a pair-programming assistant for implementing
+features, profiling and optimising hot paths, and writing the test suites that verify them.
+Every change was reviewed and tested before landing.
+
+### Project layout
 
 ```
-niksnaks_hosting.py        # Entry point; sets up GTK env for frozen builds
+niksnaks_hosting.py        # Entry point; sets up the GTK environment for frozen builds
 niksnaks_hosting/          # Application package
 ├── factory.py             # App factory
 ├── i18n.py                # gettext setup and language switching
-├── gtk_ui/                # GTK4/libadwaita UI (views, dialogs, application)
+├── version.py             # Single source of the version number
+├── gtk_ui/                # GTK4/libadwaita UI
+│   ├── dialogs/           # create_server, preferences, progress, icon picker, …
+│   └── views/             # console, performance, properties, files, connect, sidebar
 └── shared/
     ├── backend/           # server_manager, java_manager, modrinth_client,
-    │                      # download_manager, playit_manager, server_process, …
+    │                      # curseforge_client, download_manager, playit_manager,
+    │                      # bedrock_manager, server_process, config_manager, …
     └── core/              # event bus
 po/                        # Translations (.pot, .po, LINGUAS, POTFILES)
 packaging/                 # Flatpak, Linux (desktop/metainfo/icons), Windows
@@ -149,7 +219,34 @@ bin/                       # Installed launcher
 meson.build                # Build definition
 ```
 
-## Acknowledgements
+## 🌍 Translations
 
-Developed by **niksnaks3**. Thanks to the [Modrinth](https://modrinth.com) and
-[Playit](https://playit.gg) projects whose APIs make key features possible.
+Niksnaks-Hosting uses Python's standard `gettext`; translatable strings are marked with
+`_("...")` in the source. To add or update a language, generate the `.pot`, create or update
+a `.po`, add your locale to `po/LINGUAS`, and submit it with your patch — the steps are in
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+## 🤝 Contributing
+
+Contributions are welcome! Bug reports, translations, and patches all help. Please read
+[CONTRIBUTING.md](CONTRIBUTING.md) first.
+
+## 📄 License
+
+Free software, licensed under **GPL-3.0-or-later**. See [LICENSE](LICENSE) for the full text.
+
+## 💙 Acknowledgements
+
+Developed by **[niksnaks3](https://github.com/Niksnaks3)**.
+
+Thanks to [Modrinth](https://modrinth.com), [CurseForge](https://www.curseforge.com), and
+[Playit.gg](https://playit.gg), whose APIs make key features possible — and to the GTK and
+GNOME projects for the toolkit this is built on.
+
+Minecraft is a trademark of Mojang Studios. This project is not affiliated with or endorsed
+by Mojang Studios or Microsoft.
+
+<div align="center">
+<br />
+<sub>Built for people who just want to play with their friends.</sub>
+</div>

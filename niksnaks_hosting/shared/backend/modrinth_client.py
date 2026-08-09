@@ -384,10 +384,48 @@ def find_compatible_version_file(project_id: str, game_version: str, loader: str
         return None
     return (chosen.download_url, chosen.filename)
 
-def download_to(url: str, dest: Path, timeout: float = 120.0) -> None:
+def download_to(
+    url: str,
+    dest: Path,
+    timeout: float = 120.0,
+    on_bytes: Callable[[int, int], None] | None = None,
+) -> None:
+    """Fetch a file to *dest*, reporting (bytes so far, bytes expected) as it goes.
+
+    A total of 0 means the server did not say how big the file is, so a caller drawing
+    a bar has nothing to divide by and should pulse instead.
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
-    data = _download_bytes(url, timeout=timeout)
-    dest.write_bytes(data)
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+
+    # A transfer that dies halfway must not leave a truncated jar behind that later
+    # scans read as installed, so the bytes land beside the target and only move into
+    # place once the download has finished.
+    part = dest.with_name(dest.name + ".part")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CONTEXT) as resp:
+            total = int(resp.headers.get("Content-Length") or 0)
+            done = 0
+            with part.open("wb") as fh:
+                while True:
+                    chunk = resp.read(262144)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    done += len(chunk)
+                    if on_bytes:
+                        on_bytes(done, total)
+
+            # Reading in chunks means a connection that drops partway just looks like
+            # the end of the file, so the length has to be checked by hand. A jar that
+            # is short by a few kilobytes fails at class-load time on the server, which
+            # is a far worse place to find out about it than here.
+            if total and done != total:
+                raise OSError(f"Download ended early: got {done} of {total} bytes from {url}")
+
+        part.replace(dest)
+    finally:
+        part.unlink(missing_ok=True)
 
 def install_modpack(
     version_id: str,

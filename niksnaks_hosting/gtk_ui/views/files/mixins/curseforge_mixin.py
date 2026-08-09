@@ -959,8 +959,10 @@ class CurseForgeMixin:
             return
 
         set_btn(_("Installing…"), False)
+        progress = self._show_install_progress(hit.name, _("Downloading modpack..."))
 
         def on_done(result):
+            progress.finish()
             set_btn(_("Installed"), False)
             self._record_curseforge_install(hit, pack_file, result)
             self._end_mod_operation(op_token)
@@ -998,6 +1000,7 @@ class CurseForgeMixin:
                 )
 
         def on_error(message: str):
+            progress.finish()
             set_btn(_("Install"), True)
             self._end_mod_operation(op_token)
             self._alert(_("Install failed"), message)
@@ -1005,15 +1008,17 @@ class CurseForgeMixin:
         def on_progress(fraction: float):
             set_btn(f"{int(fraction * 100)}%", False)
 
+        def on_pack_progress(fraction: float, message: str) -> None:
+            GLib.idle_add(lambda f=fraction: on_progress(f) or False)
+            progress.update(fraction, detail=message)
+
         def thread_fn():
             try:
                 result = curseforge_client.install_modpack(
                     hit.mod_id,
                     pack_file.file_id,
                     root,
-                    progress_callback=lambda fraction, _message: GLib.idle_add(
-                        lambda f=fraction: on_progress(f) or False
-                    ),
+                    progress_callback=on_pack_progress,
                 )
                 GLib.idle_add(lambda r=result: on_done(r) or False)
             except Exception as ex:
