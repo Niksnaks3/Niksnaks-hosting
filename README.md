@@ -84,6 +84,8 @@ graphs in the same window.
 - **Playit.gg tunnels** — share your server with friends without touching your router.
 - **Backups** — world-only or full-server backups, restore from any of them, and optional
   auto-cleanup of ones older than 30 days.
+- **Safe quit** — closing the app stops every running server, waits for the world to finish
+  saving, and takes the auto backup before it exits. No more killing a server mid-write.
 - **Per-server Java control** — pick a Java version and set custom JVM arguments.
 
 ### Polish

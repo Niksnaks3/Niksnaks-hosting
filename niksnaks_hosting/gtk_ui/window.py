@@ -6,6 +6,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, GObject, Gtk
 
+from niksnaks_hosting.gtk_ui.dialogs.progress_dialog import ProgressDialog
 from niksnaks_hosting.gtk_ui.views.server_detail import ServerDetailView
 from niksnaks_hosting.gtk_ui.views.sidebar import Sidebar
 from niksnaks_hosting.gtk_ui.views.welcome_view import WelcomeView
@@ -99,6 +100,10 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         self._status_poll_id = GLib.timeout_add(1000, self._poll_runtime_state)
 
         self._quit_requested = False
+        # Set while the servers are being stopped and backed up on the way out, and once
+        # that has finished, so the close that follows it is not intercepted all over again.
+        self._shutdown_in_progress = False
+        self._shutdown_done = False
         self.connect("close-request", self._on_close_request)
 
         action_close_window = Gio.SimpleAction.new("close-window", None)
@@ -137,12 +142,58 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
 
             return True
 
+        # Quitting for real. A running server gets stopped, saved and backed up before the
+        # app goes anywhere: closing a window is not a reason to pull the plug on a world
+        # halfway through writing itself out.
+        if self._shutdown_in_progress:
+            return True
+        if not self._shutdown_done and self._server_manager.is_any_server_running():
+            self._begin_shutdown_sequence()
+            return True
+
         app = self.get_application()
         if hasattr(app, "_is_held_for_background") and app._is_held_for_background:
             app.release()
             app._is_held_for_background = False
 
         return False
+
+    def _begin_shutdown_sequence(self):
+        """Stop, save and back up the running servers, then close for real.
+
+        Left to itself the quit path reaches stop_all, which allows a server a few seconds
+        and then kills it -- not enough for a modded world -- and takes no backup at all,
+        because the poll that normally takes those goes away with the window.
+        """
+        self._shutdown_in_progress = True
+
+        # The quit may have come from the tray with the window hidden, and a progress
+        # dialog on a hidden window is indistinguishable from an app that will not die.
+        self.set_visible(True)
+        self.present()
+
+        progress = ProgressDialog(
+            _("Stopping servers"),
+            detail=_("Waiting for the worlds to save..."),
+            icon_name="system-shutdown-symbolic",
+        )
+        progress.present(self)
+
+        def worker():
+            self._server_manager.shutdown_all_gracefully(
+                progress_callback=lambda fraction, title, detail: progress.update(fraction, title, detail),
+            )
+
+            def done():
+                progress.finish()
+                self._shutdown_in_progress = False
+                self._shutdown_done = True
+                self.close()
+                return False
+
+            GLib.idle_add(done)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _on_close_window(self, action, param):
         self.close()
@@ -187,6 +238,12 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         current_ids = set(self._server_manager.get_running_server_ids())
         previous_ids = self._running_server_ids
         self._running_server_ids = current_ids
+
+        # The shutdown sequence stops the tunnels and takes the backups itself. Letting the
+        # poll react to the same servers going down would run a second backup alongside it,
+        # into the same folder, from another thread.
+        if self._shutdown_in_progress:
+            return True
 
         if current_ids:
             self._set_background_status(_("{} server(s) running").format(len(current_ids)))

@@ -51,6 +51,10 @@ FULL_BACKUP_NAME_RE = r"^(?:niksnaks-hosting|hosty)-full-backup-(.+)-\d{8}-\d{6}
 # Bedrock ships worlds as .mcworld; our own exports and backups are plain .zip.
 WORLD_ARCHIVE_SUFFIXES = (".mcworld", ".zip")
 
+# What stop_all allows a server when there is no longer a main loop to wait on. The
+# unhurried path is shutdown_all_gracefully, which uses the process default instead.
+EMERGENCY_STOP_SECONDS = 10.0
+
 def _restore_exec_bits(archive: zipfile.ZipFile, destination: Path) -> None:
     """Re-apply execute permissions, which zipfile.extractall drops.
 
@@ -1588,16 +1592,79 @@ class ServerManager(EventEmitter):
         return int(self._mods_operation_counts.get(server_id, 0)) > 0
 
     def stop_all(self):
-        self.playit_manager.stop()
-        for server_id, process in self._processes.items():
-            if process.is_running:
-                process.stop()
+        """Last-resort stop for teardown that cannot afford to wait.
 
-                try:
-                    process.process.wait(timeout=3.0)
-                except Exception:
-                    pass
-                process.kill()
+        shutdown_all_gracefully is the one that gives a world as long as it needs;
+        this runs from do_shutdown, where the main loop is already going away and
+        nothing is left to report progress to, so the grace period is short.
+        """
+        self.playit_manager.stop()
+        for process in self._processes.values():
+            if process.is_running:
+                process.stop_and_wait(timeout=EMERGENCY_STOP_SECONDS)
+
+    def shutdown_all_gracefully(self, progress_callback: Callable[[float, str, str], None] | None = None) -> None:
+        """Stop every running server properly, save it, and back the worlds up.
+
+        This is what quitting the app runs in place of stop_all. Each server is asked to
+        save and exit and is only killed if it ignores that, and the auto backup a normal
+        stop would trigger is taken here too -- the poll loop that normally takes those is
+        tied to the window, which is on its way out by the time this matters.
+
+        Blocking, and slow by design: callers run it on a worker thread and keep a
+        progress dialog up, reporting (fraction, title, detail).
+        """
+        running = self.get_running_server_ids()
+        self.playit_manager.stop()
+        if not running:
+            return
+
+        want_backups = self.preferences.auto_backup_on_stop
+        # Stopping is one step per server, backing up another, so the bar spends half its
+        # length on each phase instead of jumping.
+        steps = len(running) * (2 if want_backups else 1)
+        step = 0
+
+        def report(fraction: float, title: str, detail: str) -> None:
+            if progress_callback:
+                progress_callback(max(0.0, min(1.0, fraction)), title, detail)
+
+        def name_of(server_id: str) -> str:
+            info = self.get_server(server_id)
+            return info.name if info else server_id
+
+        # Everything comes down first and is only then backed up: if the machine is being
+        # shut down behind us, the servers being off is the part that has to happen early.
+        for server_id in running:
+            name = name_of(server_id)
+            base = step / steps
+            report(base, _("Stopping servers"), _("Saving and stopping {}...").format(name))
+
+            # Nothing here says how far into its save a server is, so the elapsed seconds
+            # are the only honest sign of life while the bar sits on one step.
+            def on_wait(elapsed: float) -> None:
+                report(base, "", _("Saving and stopping {}... {}s").format(name, int(elapsed)))
+
+            process = self._processes.get(server_id)
+            if process:
+                process.stop_and_wait(on_wait=on_wait)
+            step += 1
+
+        if want_backups:
+            for server_id in running:
+                name = name_of(server_id)
+                base = step / steps
+
+                def on_backup_progress(fraction: float, message: str) -> None:
+                    report(base + fraction / steps, "", _("{}: {}").format(name, message))
+
+                report(base, _("Backing up worlds"), _("Backing up {}...").format(name))
+                # A world with no folder yet just reports back that there was nothing to
+                # take; the save above already did the part that matters.
+                self.create_world_backup(server_id, auto=True, progress_callback=on_backup_progress)
+                step += 1
+
+        report(1.0, _("Closing"), "")
 
     def _configured_level_name(self, server_root: Path) -> str:
         try:
@@ -1876,7 +1943,7 @@ class ServerManager(EventEmitter):
 
         return True, str(dest)
 
-    def create_world_backup(self, server_id: str, auto: bool = False) -> tuple[bool, str]:
+    def create_world_backup(self, server_id: str, auto: bool = False, progress_callback=None) -> tuple[bool, str]:
         info = self.get_server(server_id)
         if not info:
             return False, _("Server not found")
@@ -1903,11 +1970,18 @@ class ServerManager(EventEmitter):
         try:
             with zipfile.ZipFile(backup_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 world_dir = worlds[0]
-                for item in world_dir.rglob("*"):
-                    if not item.is_file():
-                        continue
+                # Listing first costs a second walk but is what turns the zip loop into a
+                # fraction; without it a backup taken while the app is quitting looks hung.
+                files = [item for item in world_dir.rglob("*") if item.is_file()]
+                total = len(files)
+                for done, item in enumerate(files, start=1):
                     arc = item.relative_to(root)
                     zf.write(item, arcname=str(arc).replace("\\", "/"))
+                    if progress_callback:
+                        progress_callback(
+                            done / total if total else 1.0,
+                            _("Backing up world... {}/{}").format(done, total),
+                        )
         except Exception as e:
             return False, str(e)
 

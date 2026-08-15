@@ -1,7 +1,9 @@
 import re
 import subprocess
 import threading
+import time
 from collections import deque
+from collections.abc import Callable
 from pathlib import Path
 
 from niksnaks_hosting.shared.backend.loader_launch import resolve_launch_args
@@ -20,6 +22,11 @@ from niksnaks_hosting.shared.utils import memory_limit
 from niksnaks_hosting.shared.utils.subprocess_utils import hidden_subprocess_kwargs
 
 LOG_HISTORY_LINES = 1000
+
+# How long a server gets to write its world out before we stop being polite. A vanilla
+# world saves in a second or two; a big modded one with a few hundred loaded chunks can
+# spend the better part of a minute in "Saving chunks for level".
+STOP_GRACE_SECONDS = 120.0
 
 class ServerProcess(EventEmitter):
     def __init__(
@@ -198,6 +205,57 @@ class ServerProcess(EventEmitter):
             self._emit_output("[Niksnaks-Hosting] Server stopped.\n")
 
         threading.Thread(target=_wait_stop, daemon=True).start()
+
+    def stop_and_wait(
+        self,
+        timeout: float = STOP_GRACE_SECONDS,
+        on_wait: Callable[[float], None] | None = None,
+    ) -> bool:
+        """Stop the server and block until it has finished saving and exited.
+
+        stop() hands the waiting to a thread and returns immediately, which is right for
+        a button press and wrong for anything that has to happen *after* the world is on
+        disk -- taking a backup, or quitting the app. Call this from a worker thread, not
+        the main loop: it is allowed to take minutes.
+
+        *on_wait* is called every half second with the seconds spent waiting so far, so a
+        caller can show that something is still happening. Returns False if the server had
+        to be killed because it ignored the stop command for *timeout* seconds.
+        """
+        process = self._process
+        if not self.is_running or not process:
+            return True
+
+        self.status = ServerStatus.STOPPING
+        self._emit_output("[Niksnaks-Hosting] Saving world and stopping...\n")
+
+        # Bedrock has no save-all; its own stop flushes the world before it exits.
+        if not self.is_bedrock:
+            self.send_command("save-all flush")
+        self.send_command("stop")
+
+        started = time.monotonic()
+        deadline = started + max(1.0, float(timeout))
+        while process.poll() is None and time.monotonic() < deadline:
+            if on_wait:
+                on_wait(time.monotonic() - started)
+            time.sleep(0.5)
+
+        stopped_on_its_own = process.poll() is not None
+        if not stopped_on_its_own:
+            self._emit_output("[Niksnaks-Hosting] Server did not stop in time, killing...\n")
+            try:
+                process.kill()
+                process.wait(timeout=5)
+            except Exception:
+                pass
+
+        self._pid = None
+        self.status = ServerStatus.STOPPED
+        self.player_count = 0
+        self._emit_players_changed()
+        self._emit_output("[Niksnaks-Hosting] Server stopped.\n")
+        return stopped_on_its_own
 
     def kill(self):
         if self._process:
