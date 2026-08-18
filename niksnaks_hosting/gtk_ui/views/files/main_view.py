@@ -17,6 +17,12 @@ from gi.repository import Adw, GLib, Gtk
 from niksnaks_hosting.gtk_ui.dialogs.progress_dialog import ProgressDialog
 from niksnaks_hosting.shared.backend.server_manager import ServerInfo, ServerManager
 from niksnaks_hosting.shared.utils.constants import get_loader_display_name, is_bedrock
+from niksnaks_hosting.shared.utils.deletion import (
+    TRASH_DIR_NAME,
+    delete_registered,
+    register_pending_deletion,
+    unregister_pending_deletion,
+)
 
 from .mixins import BackupsMixin, CurseForgeMixin, ModrinthMixin, ModsMixin, PlayersMixin, WorldsMixin
 from .utils import *
@@ -538,7 +544,7 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
         root = self._server_dir()
         if not root:
             return None
-        d = root / ".niksnaks-hosting-trash"
+        d = root / TRASH_DIR_NAME
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -564,12 +570,17 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
             self._alert(_("Could not delete"), str(e))
             return
 
+        # Journaled so that quitting during the undo window still ends in deletion,
+        # on the way out or at the next launch.
+        register_pending_deletion(trashed)
+
         state = {"undone": False}
 
         def undo_delete():
             if state["undone"]:
                 return
             state["undone"] = True
+            unregister_pending_deletion(trashed)
             try:
                 restore_target = target
                 restore_target.parent.mkdir(parents=True, exist_ok=True)
@@ -587,13 +598,10 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
         def finalize_delete():
             if state["undone"]:
                 return False
-            try:
-                if trashed.is_dir():
-                    shutil.rmtree(trashed, ignore_errors=True)
-                else:
-                    trashed.unlink(missing_ok=True)
-            except Exception:
-                pass
+            # A world can be gigabytes; deleting it on the main thread would hang
+            # the interface, and the plain delete it replaced quietly left
+            # read-only and still-locked files behind on Windows.
+            threading.Thread(target=delete_registered, args=(trashed,), daemon=True).start()
 
             if on_finalize:
                 try:

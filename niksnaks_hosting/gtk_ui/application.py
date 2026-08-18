@@ -1,5 +1,5 @@
-import shutil
 import sys
+import threading
 
 import gi
 
@@ -14,6 +14,12 @@ from niksnaks_hosting.i18n import set_language, setup_gettext
 from niksnaks_hosting.shared.backend.server_manager import ServerManager
 from niksnaks_hosting.shared.core.events import set_main_thread_dispatcher
 from niksnaks_hosting.shared.utils.constants import APP_ID
+from niksnaks_hosting.shared.utils.deletion import (
+    delete_registered,
+    purge_pending_deletions,
+    register_pending_deletion,
+    unregister_pending_deletion,
+)
 
 class NiksnaksHostingApplication(Adw.Application):
     def __init__(self):
@@ -47,6 +53,15 @@ class NiksnaksHostingApplication(Adw.Application):
         self._server_manager = ServerManager()
 
         set_language(self._server_manager.preferences.language)
+
+        # Deletions a previous run promised but never carried out -- quit inside an
+        # undo window, or a file that stayed locked -- are finished here, before the
+        # user can touch anything that could collide with them.
+        threading.Thread(
+            target=purge_pending_deletions,
+            args=([s.server_dir for s in self._server_manager.servers],),
+            daemon=True,
+        ).start()
 
         self._setup_actions()
 
@@ -139,6 +154,12 @@ class NiksnaksHostingApplication(Adw.Application):
             self._window.shutdown_background()
         if self._server_manager:
             self._server_manager.stop_all()
+            # A delete whose undo toast the quit cut short gets one quick pass now
+            # that the servers are down; whatever still resists waits for the next
+            # launch rather than holding the exit open.
+            purge_pending_deletions(
+                [s.server_dir for s in self._server_manager.servers], max_attempts=1
+            )
         set_main_thread_dispatcher(None)
         Adw.Application.do_shutdown(self)
 
@@ -340,12 +361,17 @@ class NiksnaksHostingApplication(Adw.Application):
                 server_dir = server_info.server_dir
                 state = {"undone": False}
 
+                # Journaled before anything else: quitting inside the undo window --
+                # or crashing during the delete -- must not orphan the files, so the
+                # next launch inherits the promise to remove them.
+                register_pending_deletion(server_dir)
                 self._server_manager.delete_server(server_id, delete_files=False)
 
                 def undo_delete():
                     if state["undone"]:
                         return
                     state["undone"] = True
+                    unregister_pending_deletion(server_dir)
                     if self._server_manager.restore_server(server_snapshot):
                         self._window.sidebar.select_server(server_id)
                         info = self._server_manager.get_server(server_id)
@@ -358,10 +384,11 @@ class NiksnaksHostingApplication(Adw.Application):
                 def finalize_delete():
                     if state["undone"]:
                         return False
-                    try:
-                        shutil.rmtree(server_dir, ignore_errors=True)
-                    except Exception:
-                        pass
+                    # Off the main thread: deleting a big modded server takes long
+                    # enough on Windows to freeze the interface visibly.
+                    threading.Thread(
+                        target=delete_registered, args=(server_dir,), daemon=True
+                    ).start()
                     return False
 
                 self._window.show_toast(

@@ -41,6 +41,7 @@ from niksnaks_hosting.shared.utils.constants import (
     normalize_loader,
     ports_bound_by,
 )
+from niksnaks_hosting.shared.utils.deletion import delete_registered, register_pending_deletion, robust_rmtree
 from niksnaks_hosting.shared.utils.migration import BACKUPS_DIR, LEGACY_BACKUPS_DIR
 from niksnaks_hosting.shared.utils.storage import free_bytes, human_size, install_space_needed, scratch_dir
 
@@ -1279,7 +1280,10 @@ class ServerManager(EventEmitter):
             del self._processes[server_id]
 
         if delete_files and info.server_dir.exists():
-            shutil.rmtree(info.server_dir, ignore_errors=True)
+            # Journaled first: if a locked file wins this round, or the app dies
+            # mid-delete, the next launch finishes the job.
+            register_pending_deletion(info.server_dir)
+            delete_registered(info.server_dir)
 
         del self._servers[server_id]
         self._save()
@@ -1791,10 +1795,10 @@ class ServerManager(EventEmitter):
                 if item.resolve() == world_dir.resolve():
                     continue
                 if item.exists():
-                    shutil.rmtree(item, ignore_errors=True)
+                    robust_rmtree(item)
 
             if world_dir.exists():
-                shutil.rmtree(world_dir, ignore_errors=True)
+                robust_rmtree(world_dir)
 
             world_dir.mkdir(parents=True, exist_ok=True)
             cfg = ConfigManager(root)
@@ -1875,10 +1879,12 @@ class ServerManager(EventEmitter):
                 if item.resolve() == dst.resolve():
                     continue
                 if item.exists():
-                    shutil.rmtree(item, ignore_errors=True)
+                    # A remnant the delete skips over would merge into the imported
+                    # world, so this one is not allowed to fail quietly.
+                    robust_rmtree(item)
 
             if dst.exists():
-                shutil.rmtree(dst, ignore_errors=True)
+                robust_rmtree(dst)
 
             # Bedrock worlds carry their settings inside the level, not in server.properties,
             # and their level.dat is not the Java NBT format this reader understands.
@@ -1899,7 +1905,7 @@ class ServerManager(EventEmitter):
             cfg.save()
         except Exception as e:
             if dst.exists():
-                shutil.rmtree(dst, ignore_errors=True)
+                robust_rmtree(dst)
             return False, str(e)
 
         self.emit_on_main_thread("server-changed", info.id)
@@ -2278,10 +2284,9 @@ class ServerManager(EventEmitter):
                     for item in root.iterdir():
                         if item.name in BACKUP_DIR_NAMES:
                             continue
-                        if item.is_dir():
-                            shutil.rmtree(item, ignore_errors=True)
-                        else:
-                            item.unlink(missing_ok=True)
+                        # Anything that survives here ends up mixed into the restored
+                        # server, so locked and read-only files must go too.
+                        robust_rmtree(item)
 
                     copy_total = _count_files(tmp_root)
                     report(0.55, _("Restoring files..."))
@@ -2325,14 +2330,14 @@ class ServerManager(EventEmitter):
                                 )
                             )
                         ):
-                            shutil.rmtree(item, ignore_errors=True)
+                            robust_rmtree(item)
 
                     report(0.55, _("Restoring world..."))
                     for item in extracted_worlds:
                         # Bedrock worlds keep their own folder name; Java's is always "world".
                         dst = container / item.name if bedrock else root / "world"
                         if dst.is_dir():
-                            shutil.rmtree(dst, ignore_errors=True)
+                            robust_rmtree(dst)
                         _copy_tree_with_progress(item, dst, on_file=on_copied)
 
             if not is_full or not self.bedrock_runtime_missing(server_id):
