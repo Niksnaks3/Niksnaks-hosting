@@ -294,16 +294,18 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         if server_id in self._playit_autostart_paused_ids:
             return
 
-        cfg = self._load_playit_config(server_id)
-        if not cfg.get("enabled", False):
-            return
-        if not cfg.get("auto_start", True):
-            return
-
+        # The in-memory answers come first: this runs every second for every running
+        # server, and the config -- cached as it is -- still costs a stat call.
         if playit.is_running_for(server_id):
             return
 
         if server_id in self._playit_starting_server_ids:
+            return
+
+        cfg = self._load_playit_config(server_id)
+        if not cfg.get("enabled", False):
+            return
+        if not cfg.get("auto_start", True):
             return
 
         info = self._server_manager.get_server(server_id)

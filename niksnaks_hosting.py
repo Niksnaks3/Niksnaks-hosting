@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
+import threading
 from pathlib import Path
 
 from niksnaks_hosting.factory import create_application
@@ -74,6 +75,26 @@ def _configure_windows_app_identity() -> None:
         signal_show()
         sys.exit(0)
 
+def _warm_slow_imports_in_background() -> None:
+    """Load the slow third-party modules on a spare core while the main thread
+    loads GTK. requests alone costs ~100ms of the boot when imported serially --
+    more on a cold start, with the virus scanner reading every file -- and the
+    backend managers pull it in before the window can appear. Overlapped with
+    the much longer GTK typelib load, it is close to free."""
+
+    def _work() -> None:
+        try:
+            import requests  # noqa: F401
+        except Exception:
+            pass
+        try:
+            import psutil  # noqa: F401
+        except Exception:
+            pass
+
+    threading.Thread(target=_work, daemon=True, name="import-warmup").start()
+
+
 def _format_missing_gtk_message() -> str:
     if sys.platform == "win32":
         return (
@@ -89,7 +110,10 @@ def _format_missing_gtk_message() -> str:
 
 def main():
     try:
+        # After the single-instance check, so a duplicate launch still exits
+        # without spinning anything up.
         _configure_windows_app_identity()
+        _warm_slow_imports_in_background()
         _configure_frozen_gtk_environment()
         app = create_application()
         return app.run(sys.argv)

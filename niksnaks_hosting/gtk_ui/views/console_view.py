@@ -1,3 +1,5 @@
+from itertools import groupby
+
 import gi
 
 gi.require_version("Gtk", "4.0")
@@ -21,6 +23,8 @@ class ConsoleView(Gtk.Box):
         self._auto_scroll = True
         self._scroll_pending = False
         self._lines_since_trim = 0
+        self._pending_lines: list[str] = []
+        self._flush_scheduled = False
 
         self._scrolled = Gtk.ScrolledWindow()
         self._scrolled.set_vexpand(True)
@@ -88,40 +92,60 @@ class ConsoleView(Gtk.Box):
             self._output_handler_id = process.connect("output-received", self._on_output_received)
 
     def clear(self):
+        self._pending_lines.clear()
         self._buffer.set_text("")
         self._lines_since_trim = 0
 
     def append_text(self, text: str):
-        end_iter = self._buffer.get_end_iter()
+        # A modded server starting up prints hundreds of lines a second, and a
+        # buffer insert per line makes the text view do layout work per line. Lines
+        # queue here and land in the buffer once per main-loop cycle instead.
+        self._pending_lines.append(text)
+        if not self._flush_scheduled:
+            self._flush_scheduled = True
+            GLib.idle_add(self._flush_pending)
 
-        tag = None
+    def _tag_for(self, text: str):
         if text.startswith("[Niksnaks-Hosting]"):
-            tag = self._tag_niksnaks_hosting
-        elif "WARN" in text:
-            tag = self._tag_warn
-        elif "ERROR" in text or "Exception" in text:
-            tag = self._tag_error
-        elif "INFO" in text:
-            tag = self._tag_info
+            return self._tag_niksnaks_hosting
+        if "WARN" in text:
+            return self._tag_warn
+        if "ERROR" in text or "Exception" in text:
+            return self._tag_error
+        if "INFO" in text:
+            return self._tag_info
+        return None
 
-        if tag:
-            self._buffer.insert_with_tags(end_iter, text, tag)
-        else:
-            self._buffer.insert(end_iter, text)
+    def _flush_pending(self):
+        self._flush_scheduled = False
+        pending, self._pending_lines = self._pending_lines, []
+        if not pending:
+            return False
 
-        self._trim_scrollback(text)
+        end_iter = self._buffer.get_end_iter()
+        # Runs of lines that would color the same go in as one insert. Each insert
+        # revalidates the iter to the end of what it wrote, so it can be reused.
+        for tag, lines in groupby(pending, key=self._tag_for):
+            chunk = "".join(lines)
+            if tag:
+                self._buffer.insert_with_tags(end_iter, chunk, tag)
+            else:
+                self._buffer.insert(end_iter, chunk)
+
+        self._trim_scrollback(sum(max(1, line.count("\n")) for line in pending))
 
         # A server can emit a burst of lines in one go; one scroll after the burst puts
         # the view in the same place as one scroll per line, for a fraction of the work.
         if self._auto_scroll and not self._scroll_pending:
             self._scroll_pending = True
             GLib.idle_add(self._scroll_to_bottom)
+        return False
 
-    def _trim_scrollback(self, text: str):
+    def _trim_scrollback(self, appended_lines: int):
         # Asking the buffer for its line count is the only cost on the common path, so do
         # it once per slack window. Count the newlines actually added rather than the
         # calls, so a chunk carrying many lines still moves the window along.
-        self._lines_since_trim += max(1, text.count("\n"))
+        self._lines_since_trim += appended_lines
         if self._lines_since_trim < TRIM_SLACK_LINES:
             return
         self._lines_since_trim = 0

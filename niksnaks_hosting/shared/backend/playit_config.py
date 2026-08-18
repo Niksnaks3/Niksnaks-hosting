@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
 from pathlib import Path
 
 DEFAULT_PLAYIT_CONFIG = {
@@ -20,10 +22,29 @@ def playit_config_path(server_dir: str | Path) -> Path:
     root = Path(server_dir)
     return root / ".niksnaks-hosting-playit.json"
 
+# The runtime poll asks for this config every second for every running server, which
+# on Windows means a disk read per server per second for a file that changes only
+# when its dialog saves it. Parsed configs are kept per path and invalidated by
+# mtime, so the steady state costs one stat call.
+_cache_lock = threading.Lock()
+_config_cache: dict[str, tuple[int, dict]] = {}
+
 def load_playit_config(server_dir: str | Path) -> dict:
     path = playit_config_path(server_dir)
-    if not path.exists():
+    key = os.path.normcase(os.fspath(path))
+
+    try:
+        mtime_ns = path.stat().st_mtime_ns
+    except OSError:
+        with _cache_lock:
+            _config_cache.pop(key, None)
         return dict(DEFAULT_PLAYIT_CONFIG)
+
+    with _cache_lock:
+        cached = _config_cache.get(key)
+        if cached and cached[0] == mtime_ns:
+            # Callers may edit what they get, so the cached copy stays private.
+            return dict(cached[1])
 
     try:
         with open(path, encoding="utf-8") as f:
@@ -52,6 +73,9 @@ def load_playit_config(server_dir: str | Path) -> dict:
         cfg["voicechat_port"] = int(cfg.get("voicechat_port", 24454))
     except Exception:
         cfg["voicechat_port"] = 24454
+
+    with _cache_lock:
+        _config_cache[key] = (mtime_ns, dict(cfg))
     return cfg
 
 def save_playit_config(server_dir: str | Path, config: dict) -> bool:
@@ -79,6 +103,10 @@ def save_playit_config(server_dir: str | Path, config: dict) -> bool:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
+        # Dropped rather than updated: the next load re-reads and re-validates, and
+        # a same-instant rewrite on a coarse-mtime filesystem cannot serve stale data.
+        with _cache_lock:
+            _config_cache.pop(os.path.normcase(os.fspath(path)), None)
         return True
     except Exception:
         return False

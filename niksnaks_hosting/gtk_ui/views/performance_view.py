@@ -1,3 +1,6 @@
+import re
+import time
+
 import gi
 
 gi.require_version("Gtk", "4.0")
@@ -120,6 +123,7 @@ class PerformanceView(Gtk.Box):
         self._psutil_process = None
         self._tps_value = 20.0
         self._tps_handler_id = None
+        self._cpu_count = (psutil.cpu_count() or 1) if HAS_PSUTIL else 1
 
         self._scrolled = Gtk.ScrolledWindow()
         self._scrolled.set_vexpand(True)
@@ -242,8 +246,7 @@ class PerformanceView(Gtk.Box):
                     self._psutil_process = psutil.Process(pid)
 
                 raw_cpu = self._psutil_process.cpu_percent(interval=None)
-                cpu_count = psutil.cpu_count() or 1
-                cpu = raw_cpu / float(cpu_count)
+                cpu = raw_cpu / float(self._cpu_count)
                 cpu = max(0.0, min(100.0, cpu))
                 self._cpu_card.add_value(cpu, f"{cpu:.1f}")
 
@@ -252,8 +255,6 @@ class PerformanceView(Gtk.Box):
                 rss_gb = rss_mb / 1024.0
 
                 self._ram_card.add_value(rss_mb, f"{rss_gb:.2f}")
-
-                import time
 
                 create_time = self._psutil_process.create_time()
                 uptime_secs = time.time() - create_time
@@ -271,8 +272,6 @@ class PerformanceView(Gtk.Box):
         return True
 
     def _on_output_for_tps(self, process, text):
-        import re
-
         match = re.search(r"Running (\d+)ms behind", text)
         if match:
             behind_ms = int(match.group(1))
