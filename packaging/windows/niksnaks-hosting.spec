@@ -12,9 +12,61 @@ import os
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.win32.versioninfo import (
+    FixedFileInfo,
+    StringFileInfo,
+    StringStruct,
+    StringTable,
+    VarFileInfo,
+    VarStruct,
+    VSVersionInfo,
+)
 
 PROJECT = Path(SPECPATH).resolve().parents[1]
 PREFIX = Path(os.environ.get("MSYS_PREFIX", "C:/msys64/ucrt64"))
+
+# Read straight from version.py rather than duplicating the number here, the same
+# way the .iss installer script does -- one source of truth for the version that
+# actually ships, instead of a metadata field that quietly drifts from it.
+_version_line = (PROJECT / "niksnaks_hosting" / "version.py").read_text(encoding="utf-8")
+APP_VERSION = _version_line.split('"')[1]
+_version_tuple = tuple(int(part) for part in APP_VERSION.split(".")) + (0, 0, 0, 0)
+_version_tuple = _version_tuple[:4]
+
+# Without this, Windows' file Properties -> Details tab is blank: no company, no
+# description, no product version -- just whatever PyInstaller leaves default.
+VERSION_INFO = VSVersionInfo(
+    ffi=FixedFileInfo(
+        filevers=_version_tuple,
+        prodvers=_version_tuple,
+        mask=0x3F,
+        flags=0x0,
+        OS=0x40004,  # VOS_NT_WINDOWS32
+        fileType=0x1,  # VFT_APP
+        subtype=0x0,
+        date=(0, 0),
+    ),
+    kids=[
+        StringFileInfo(
+            [
+                StringTable(
+                    "040904B0",
+                    [
+                        StringStruct("CompanyName", "niksnaks3"),
+                        StringStruct("FileDescription", "Niksnaks-Hosting"),
+                        StringStruct("FileVersion", APP_VERSION),
+                        StringStruct("InternalName", "Niksnaks-Hosting"),
+                        StringStruct("LegalCopyright", "Copyright (C) niksnaks3. Licensed under GPL-3.0-or-later."),
+                        StringStruct("OriginalFilename", "Niksnaks-Hosting.exe"),
+                        StringStruct("ProductName", "Niksnaks-Hosting"),
+                        StringStruct("ProductVersion", APP_VERSION),
+                    ],
+                )
+            ]
+        ),
+        VarFileInfo([VarStruct("Translation", [1033, 1200])]),
+    ],
+)
 
 # Console builds are useful when debugging startup failures.
 CONSOLE = os.environ.get("NIKSNAKS_CONSOLE") == "1"
@@ -129,6 +181,7 @@ exe = EXE(
     console=CONSOLE,
     icon=str(icon_file) if icon_file.exists() else None,
     contents_directory=".",
+    version=VERSION_INFO,
 )
 
 coll = COLLECT(
