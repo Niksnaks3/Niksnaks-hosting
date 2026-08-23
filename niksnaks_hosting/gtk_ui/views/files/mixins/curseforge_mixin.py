@@ -14,7 +14,7 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Adw, GLib, Gtk, Pango
 
 from ..utils import *
-from niksnaks_hosting.shared.utils.constants import get_loader_display_name
+from niksnaks_hosting.shared.utils.constants import LOADER_NEOFORGE, get_loader_display_name
 
 CURSEFORGE_STATE_FILE = ".niksnaks-hosting-curseforge.json"
 
@@ -117,7 +117,7 @@ class CurseForgeMixin:
         loader = entry.get("loader", "")
         loader_version = entry.get("loader_version", "")
         if loader and loader_version:
-            bits.append(f"{loader.title()} {loader_version}")
+            bits.append(f"{get_loader_display_name(loader)} {loader_version}")
         elif entry.get("file_name"):
             bits.append(entry["file_name"])
         row.set_subtitle(" · ".join(bits))
@@ -197,13 +197,29 @@ class CurseForgeMixin:
         self._toast(_("Deleted {} ({} mod files removed)").format(title, removed))
 
     # ---------------------------------------------------------------- browse page
+    def _curseforge_loader(self) -> str:
+        """The loader the browser is filtering on.
+
+        Normally the server's own, so it only ever lists packs that server can run. A
+        loader tab pins it to one loader instead, and offers to switch the server over.
+        """
+        return self._curseforge_loader_override or self._server_loader()
+
     def _push_curseforge_page(self, *_args) -> None:
+        self._open_modpack_browser("", _("CurseForge"))
+
+    def _push_neoforge_page(self, *_args) -> None:
+        self._open_modpack_browser(LOADER_NEOFORGE, get_loader_display_name(LOADER_NEOFORGE))
+
+    def _open_modpack_browser(self, loader_override: str, title: str) -> None:
+        self._curseforge_loader_override = loader_override
+
         self._curseforge_nav = Adw.NavigationView()
         self._curseforge_nav.set_hexpand(True)
         self._curseforge_nav.set_vexpand(True)
 
         search_page = Adw.NavigationPage(
-            title=_("CurseForge"),
+            title=title,
             child=self._build_curseforge_search_view(),
         )
         try:
@@ -212,7 +228,7 @@ class CurseForgeMixin:
             pass
         self._curseforge_nav.push(search_page)
 
-        outer_page = Adw.NavigationPage(title=_("CurseForge"), child=self._curseforge_nav)
+        outer_page = Adw.NavigationPage(title=title, child=self._curseforge_nav)
         self._curseforge_page = outer_page
         if self._push_fullscreen_page_cb:
             if self._curseforge_header:
@@ -260,7 +276,7 @@ class CurseForgeMixin:
         tv.add_top_bar(header)
 
         mc_version = self._server_info.mc_version if self._server_info else ""
-        loader = self._server_loader()
+        loader = self._curseforge_loader()
         entry.set_placeholder_text(
             _("Search {} {} modpacks…").format(get_loader_display_name(loader), mc_version)
             if mc_version
@@ -797,7 +813,7 @@ class CurseForgeMixin:
                 row.set_activatable(False)
                 message = _("No versions for Minecraft {} on {}.").format(
                     self._server_info.mc_version if self._server_info else "?",
-                    get_loader_display_name(self._server_loader()),
+                    get_loader_display_name(self._curseforge_loader()),
                 )
                 label = Gtk.Label(label=error or message, xalign=0.0, margin_top=10, margin_bottom=10)
                 label.set_wrap(True)
@@ -855,7 +871,7 @@ class CurseForgeMixin:
                 loaded = curseforge_client.get_files(
                     hit.mod_id,
                     game_version=self._server_info.mc_version if self._server_info else "",
-                    loader=self._server_loader(),
+                    loader=self._curseforge_loader(),
                     page_size=30,
                 )
                 GLib.idle_add(lambda entries=loaded: populate_versions(entries, None) or False)
@@ -884,7 +900,7 @@ class CurseForgeMixin:
             return
 
         mc_version = self._server_info.mc_version
-        loader = self._server_loader()
+        loader = self._curseforge_loader()
 
         def confirm(chosen):
             if not chosen:
@@ -927,9 +943,16 @@ class CurseForgeMixin:
             dialog.connect("response", on_response)
             dialog.present(self.get_root())
 
+        def gate(chosen):
+            """A pack for another loader never installs onto this server unasked."""
+            if not chosen or loader == self._server_loader():
+                confirm(chosen)
+                return
+            self._confirm_loader_switch(hit, chosen, set_btn, loader, lambda: confirm(chosen))
+
         if pack_file is not None:
             set_btn(_("Installing…"), False)
-            confirm(pack_file)
+            gate(pack_file)
             return
 
         set_btn(_("Checking…"), False)
@@ -939,9 +962,86 @@ class CurseForgeMixin:
                 chosen = curseforge_client.find_compatible_file(hit.mod_id, mc_version, loader)
             except Exception:
                 chosen = None
-            GLib.idle_add(lambda c=chosen: confirm(c) or False)
+            GLib.idle_add(lambda c=chosen: gate(c) or False)
 
         threading.Thread(target=resolve, daemon=True).start()
+
+    def _confirm_loader_switch(self, hit, pack_file, set_btn, target_loader: str, then_install) -> None:
+        """Ask before converting the server, because the pack alone cannot make it run.
+
+        Nothing is installed until the user says yes: a pack from a loader tab lands on a
+        server built for another loader only by explicit choice.
+        """
+        current_name = get_loader_display_name(self._server_loader())
+        target_name = get_loader_display_name(target_loader)
+        mc_version = self._server_info.mc_version if self._server_info else ""
+
+        dialog = Adw.AlertDialog()
+        dialog.set_heading(_("Switch this server to {}?").format(target_name))
+        dialog.set_body(
+            _(
+                "{} needs {}, and this server runs {}.\n\n"
+                "Switching backs the server up first, then installs {} for Minecraft {}. "
+                "Your world and server settings are kept, but mods built for {} stop "
+                "loading and are moved aside."
+            ).format(hit.name, target_name, current_name, target_name, mc_version, current_name)
+        )
+        dialog.add_response("cancel", _("Cancel"))
+        dialog.add_response("switch", _("Switch and install"))
+        dialog.set_response_appearance("switch", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+
+        def on_response(_dialog, response):
+            if response == "switch":
+                self._run_loader_switch(hit, set_btn, target_loader, then_install)
+            else:
+                set_btn(_("Install"), True)
+
+        dialog.connect("response", on_response)
+        dialog.present(self.get_root())
+
+    def _run_loader_switch(self, hit, set_btn, target_loader: str, then_install) -> None:
+        """Convert the server to *target_loader*, then hand back to the pack install."""
+        op_token = self._begin_mod_operation()
+        if not op_token:
+            self._alert(_("No server selected"), _("Select a server before installing a modpack."))
+            set_btn(_("Install"), True)
+            return
+
+        server_id = self._server_info.id
+        mc_version = self._server_info.mc_version
+        target_name = get_loader_display_name(target_loader)
+        progress = self._show_install_progress(target_name, _("Switching loader..."))
+
+        def on_done(ok: bool, message: str):
+            progress.finish()
+            self._end_mod_operation(op_token)
+            if not ok:
+                set_btn(_("Install"), True)
+                self._alert(_("Could not switch loader"), message)
+                return
+
+            # The server is a different server now; the row subtitles and the pack list
+            # both read from it, and the install that follows needs the new loader.
+            self._refresh_modpack_row_subtitles()
+            self._rebuild_lists()
+            self._toast(_("Switched to {}").format(target_name))
+            then_install()
+
+        def thread_fn():
+            try:
+                ok, message = self._server_manager.update_server_runtime(
+                    server_id,
+                    mc_version,
+                    loader_type=target_loader,
+                    progress_callback=lambda f, text: progress.update(f, detail=text),
+                )
+            except Exception as ex:
+                ok, message = False, str(ex)
+            GLib.idle_add(lambda o=ok, m=message: on_done(o, m) or False)
+
+        threading.Thread(target=thread_fn, daemon=True).start()
 
     def _run_curseforge_install(self, hit, pack_file, set_btn) -> None:
         from niksnaks_hosting.shared.backend import curseforge_client
@@ -992,7 +1092,7 @@ class CurseForgeMixin:
             ):
                 self._toast(
                     _("This pack targets {} {}; the server runs {}").format(
-                        (result.pack_loader or "").title() or get_loader_display_name(self._server_loader()),
+                        get_loader_display_name(result.pack_loader or self._server_loader()),
                         result.pack_loader_version,
                         server_loader_version,
                     ),

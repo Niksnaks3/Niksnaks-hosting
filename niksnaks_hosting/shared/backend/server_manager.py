@@ -29,6 +29,7 @@ from niksnaks_hosting.shared.utils.constants import (
     EDITION_JAVA,
     LOADER_FABRIC,
     LOADER_FORGE,
+    LOADER_NEOFORGE,
     MAX_SERVER_PORT,
     MIN_SERVER_PORT,
     SERVERS_DIR,
@@ -40,10 +41,15 @@ from niksnaks_hosting.shared.utils.constants import (
     normalize_edition,
     normalize_loader,
     ports_bound_by,
+    uses_installer,
 )
 from niksnaks_hosting.shared.utils.deletion import delete_registered, register_pending_deletion, robust_rmtree
 from niksnaks_hosting.shared.utils.migration import BACKUPS_DIR, LEGACY_BACKUPS_DIR
 from niksnaks_hosting.shared.utils.storage import free_bytes, human_size, install_space_needed, scratch_dir
+
+# Where servers go on a remote host: under the login user's home, so no privileges
+# beyond the account itself are ever needed.
+REMOTE_SERVERS_DIR = "niksnaks-hosting/servers"
 
 BACKUP_DIR_NAMES = (BACKUPS_DIR, LEGACY_BACKUPS_DIR)
 FULL_BACKUP_PREFIXES = ("niksnaks-hosting-full-backup-", "hosty-full-backup-")
@@ -164,9 +170,31 @@ class ServerInfo:
         self.created_at: str = data.get("created_at", datetime.now().isoformat())
         self.path: str = data.get("path", "")
         self.autostart: bool = data.get("autostart", False)
+        # Empty means this computer, which is what every server made before SSH
+        # support existed was, so old entries need no migrating.
+        self.host_id: str = str(data.get("host_id", "") or "")
+
+    @property
+    def is_remote(self) -> bool:
+        return bool(self.host_id)
+
+    @property
+    def host(self):
+        """The machine this server lives on."""
+        from niksnaks_hosting.shared.remote.hosts_manager import get_hosts_manager
+
+        return get_hosts_manager().require(self.host_id)
 
     @property
     def server_dir(self) -> Path:
+        """The server's folder, on whichever machine that is.
+
+        For a remote server this is a RemotePath, which answers the same questions a
+        Path does but over SFTP. That is what lets the code above this line stay the
+        same for both kinds of server.
+        """
+        if self.is_remote:
+            return self.host.path(self.path or f"{self.host.home}/{REMOTE_SERVERS_DIR}/{self.id}")
         if self.path:
             return Path(self.path)
         return SERVERS_DIR / self.id
@@ -186,6 +214,7 @@ class ServerInfo:
             "created_at": self.created_at,
             "path": str(self.server_dir),
             "autostart": self.autostart,
+            "host_id": self.host_id,
         }
 
 class ServerManager(EventEmitter):
@@ -194,6 +223,7 @@ class ServerManager(EventEmitter):
         self._servers: dict[str, ServerInfo] = {}
         self._processes: dict[str, ServerProcess] = {}
         self._mods_operation_counts: dict[str, int] = {}
+        self._remote_java: dict[str, object] = {}
         self.java_manager = JavaManager()
         self.download_manager = DownloadManager()
         self.bedrock_manager = BedrockManager()
@@ -237,10 +267,19 @@ class ServerManager(EventEmitter):
         java_version: int | None = None,
         loader_type: str = LOADER_FABRIC,
         edition: str = EDITION_JAVA,
+        host_id: str = "",
     ) -> ServerInfo:
 
         server_id = str(uuid.uuid4())
         java_ver = java_version if java_version is not None else get_required_java_version(mc_version)
+
+        if host_id:
+            from niksnaks_hosting.shared.remote.hosts_manager import get_hosts_manager
+
+            host = get_hosts_manager().require(host_id)
+            server_path = f"{host.home}/{REMOTE_SERVERS_DIR}/{server_id}"
+        else:
+            server_path = str(SERVERS_DIR / server_id)
 
         info = ServerInfo(
             {
@@ -252,7 +291,8 @@ class ServerManager(EventEmitter):
                 "loader_version": loader_version,
                 "ram_mb": ram_mb,
                 "java_version": java_ver,
-                "path": str(SERVERS_DIR / server_id),
+                "path": server_path,
+                "host_id": host_id,
             }
         )
 
@@ -314,6 +354,41 @@ class ServerManager(EventEmitter):
                 proc.ram_mb = ram_mb
             self.emit_on_main_thread("server-changed", server_id)
 
+    @staticmethod
+    def _clear_loader_runtime(root: Path) -> None:
+        """Strip whatever loader is installed so an installer writes onto bare ground.
+
+        Forge and NeoForge unpack hundreds of libraries keyed by their own version, and
+        the launcher picks the args file it finds. Leaving an old install behind would
+        let a stale one win, so both are cleared along with Fabric's jars.
+        """
+        from niksnaks_hosting.shared.backend.loader_launch import (
+            FABRIC_LAUNCH_JAR,
+            LOADER_JAR_GLOBS,
+            LOADER_LIBRARY_PATHS,
+        )
+
+        for filename in ("server.jar", FABRIC_LAUNCH_JAR, "run.bat", "run.sh", "user_jvm_args.txt"):
+            try:
+                (root / filename).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        for pattern in LOADER_JAR_GLOBS.values():
+            for jar in root.glob(pattern):
+                if "installer" in jar.name.lower():
+                    continue
+                try:
+                    jar.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        for library_paths in LOADER_LIBRARY_PATHS.values():
+            for library_path in library_paths:
+                loader_libs = root.joinpath(*library_path)
+                if loader_libs.is_dir():
+                    shutil.rmtree(loader_libs, ignore_errors=True)
+
     def update_server_version(self, server_id: str, mc_version: str) -> tuple[bool, str]:
         return self.update_server_runtime(server_id, mc_version, None)
 
@@ -347,7 +422,7 @@ class ServerManager(EventEmitter):
         elif target_loader != info.loader_type:
 
             loader_version = ""
-        elif target_loader == LOADER_FORGE:
+        elif uses_installer(target_loader):
 
             loader_version = ""
         else:
@@ -382,50 +457,51 @@ class ServerManager(EventEmitter):
 
         java_path = self.java_manager.get_java_path(java_req) or self.java_manager.get_java_for_mc(mc_version) or "java"
 
-        if target_loader == LOADER_FORGE:
-            forge_build = loader_version or self.download_manager.get_forge_recommended_build(mc_version)
-            if not forge_build:
-                return False, _("No Forge build available for Minecraft {}").format(mc_version)
-            loader_version = forge_build
-            full_version = get_forge_full_version(mc_version, forge_build)
+        if uses_installer(target_loader):
+            loader_name = get_loader_display_name(target_loader)
 
-            progress(0.28, _("Downloading Forge installer"))
-            installer_path = self.download_manager.download_forge_installer(
-                full_version,
-                progress_callback=lambda f, text: progress(0.28 + f * 0.14, text),
-            )
+            if target_loader == LOADER_NEOFORGE:
+                build = loader_version or self.download_manager.get_neoforge_recommended_version(mc_version)
+            else:
+                build = loader_version or self.download_manager.get_forge_recommended_build(mc_version)
+            if not build:
+                return False, _("No {} build available for Minecraft {}").format(loader_name, mc_version)
+            loader_version = build
+
+            progress(0.28, _("Downloading {} installer").format(loader_name))
+            if target_loader == LOADER_NEOFORGE:
+                installer_path = self.download_manager.download_neoforge_installer(
+                    build,
+                    progress_callback=lambda f, text: progress(0.28 + f * 0.14, text),
+                )
+            else:
+                installer_path = self.download_manager.download_forge_installer(
+                    get_forge_full_version(mc_version, build),
+                    progress_callback=lambda f, text: progress(0.28 + f * 0.14, text),
+                )
             if not installer_path:
-                return False, _("Failed to download Forge installer")
+                return False, _("Failed to download {} installer").format(loader_name)
 
-            for filename in ("server.jar", "fabric-server-launch.jar"):
-                try:
-                    (root / filename).unlink(missing_ok=True)
-                except Exception:
-                    pass
-            for jar in root.glob("forge-*.jar"):
-                if "installer" not in jar.name.lower():
-                    try:
-                        jar.unlink(missing_ok=True)
-                    except Exception:
-                        pass
-            for name in ("run.bat", "run.sh", "user_jvm_args.txt"):
-                try:
-                    (root / name).unlink(missing_ok=True)
-                except Exception:
-                    pass
-            forge_libs = root.joinpath("libraries", "net", "minecraftforge", "forge")
-            if forge_libs.is_dir():
-                shutil.rmtree(forge_libs, ignore_errors=True)
+            self._clear_loader_runtime(root)
 
-            progress(0.44, _("Installing Forge server"))
-            ok, msg = self.download_manager.install_forge_server(
-                java_path=java_path,
-                installer_jar=installer_path,
-                mc_version=mc_version,
-                forge_build=forge_build,
-                server_dir=str(root),
-                progress_callback=lambda f, text: progress(0.44 + f * 0.46, text),
-            )
+            progress(0.44, _("Installing {} server").format(loader_name))
+            if target_loader == LOADER_NEOFORGE:
+                ok, msg = self.download_manager.install_neoforge_server(
+                    java_path=java_path,
+                    installer_jar=installer_path,
+                    mc_version=mc_version,
+                    server_dir=str(root),
+                    progress_callback=lambda f, text: progress(0.44 + f * 0.46, text),
+                )
+            else:
+                ok, msg = self.download_manager.install_forge_server(
+                    java_path=java_path,
+                    installer_jar=installer_path,
+                    mc_version=mc_version,
+                    forge_build=build,
+                    server_dir=str(root),
+                    progress_callback=lambda f, text: progress(0.44 + f * 0.46, text),
+                )
             if not ok:
                 return False, msg
         else:
@@ -1279,7 +1355,21 @@ class ServerManager(EventEmitter):
         if server_id in self._processes:
             del self._processes[server_id]
 
-        if delete_files and info.server_dir.exists():
+        if info.is_remote:
+            # The unit outlives the folder, so it has to be withdrawn explicitly or the
+            # host is left with a service pointing at nothing.
+            try:
+                from niksnaks_hosting.shared.remote.systemd_service import SystemdService
+
+                SystemdService(info.host, server_id, str(info.server_dir)).remove_unit()
+            except Exception:
+                pass
+            if delete_files:
+                try:
+                    info.host.run(["rm", "-rf", "--", str(info.server_dir)], timeout=300)
+                except Exception:
+                    pass
+        elif delete_files and info.server_dir.exists():
             # Journaled first: if a locked file wins this round, or the app dies
             # mid-delete, the next launch finishes the job.
             register_pending_deletion(info.server_dir)
@@ -1299,7 +1389,12 @@ class ServerManager(EventEmitter):
 
             java_path = ""
             if not server_is_bedrock:
-                java_path = self.java_manager.get_java_path(info.java_version) or shutil.which("java") or "java"
+                if info.is_remote:
+                    java_path = self.remote_java_path(info)
+                else:
+                    java_path = (
+                        self.java_manager.get_java_path(info.java_version) or shutil.which("java") or "java"
+                    )
 
             config = self.get_config(server_id)
             default_max_players = 10 if server_is_bedrock else 20
@@ -1308,17 +1403,53 @@ class ServerManager(EventEmitter):
                 config.load()
                 max_players = config.get_int("max-players", default_max_players)
 
-            self._processes[server_id] = ServerProcess(
-                server_dir=str(info.server_dir),
-                java_path=java_path,
-                ram_mb=info.ram_mb,
-                max_players=max_players,
-                jvm_args=info.jvm_args,
-                loader_type=info.loader_type,
-                edition=info.edition,
-            )
+            if info.is_remote:
+                from niksnaks_hosting.shared.remote.remote_process import RemoteServerProcess
+
+                process = RemoteServerProcess(
+                    host=info.host,
+                    server_id=server_id,
+                    server_dir=str(info.server_dir),
+                    java_path=java_path,
+                    ram_mb=info.ram_mb,
+                    max_players=max_players,
+                    jvm_args=info.jvm_args,
+                    loader_type=info.loader_type,
+                    edition=info.edition,
+                    description=info.name,
+                )
+                self._processes[server_id] = process
+                # A remote server keeps running while the app is closed, so the first
+                # time one is looked at, find out whether it is already up.
+                process.adopt_running_state()
+            else:
+                self._processes[server_id] = ServerProcess(
+                    server_dir=str(info.server_dir),
+                    java_path=java_path,
+                    ram_mb=info.ram_mb,
+                    max_players=max_players,
+                    jvm_args=info.jvm_args,
+                    loader_type=info.loader_type,
+                    edition=info.edition,
+                )
 
         return self._processes[server_id]
+
+    def remote_java(self, info: ServerInfo):
+        """The Java manager for the host a server lives on."""
+        from niksnaks_hosting.shared.remote.remote_java import RemoteJavaManager
+
+        manager = self._remote_java.get(info.host_id)
+        if manager is None:
+            manager = RemoteJavaManager(info.host)
+            self._remote_java[info.host_id] = manager
+        return manager
+
+    def remote_java_path(self, info: ServerInfo) -> str:
+        try:
+            return self.remote_java(info).java_path(info.java_version)
+        except Exception:
+            return ""
 
     def get_existing_process(self, server_id: str) -> ServerProcess | None:
         return self._processes.get(server_id)
@@ -1327,7 +1458,9 @@ class ServerManager(EventEmitter):
         info = self._servers.get(server_id)
         if not info:
             return None
-        return ConfigManager(str(info.server_dir))
+        # The path object, not its text: for a remote server the object is what knows
+        # which machine the file is on.
+        return ConfigManager(info.server_dir)
 
     def is_any_server_running(self) -> bool:
         return any(p.is_running for p in self._processes.values())
@@ -2096,10 +2229,9 @@ class ServerManager(EventEmitter):
         if source and is_bedrock(source.edition):
             return EDITION_BEDROCK, LOADER_FABRIC
 
-        if is_loader_installed(staged, LOADER_FORGE):
-            return EDITION_JAVA, LOADER_FORGE
-        if is_loader_installed(staged, LOADER_FABRIC):
-            return EDITION_JAVA, LOADER_FABRIC
+        for loader in (LOADER_NEOFORGE, LOADER_FORGE, LOADER_FABRIC):
+            if is_loader_installed(staged, loader):
+                return EDITION_JAVA, loader
 
         return EDITION_JAVA, source.loader_type if source else LOADER_FABRIC
 

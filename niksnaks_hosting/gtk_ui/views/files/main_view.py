@@ -16,7 +16,7 @@ from gi.repository import Adw, GLib, Gtk
 
 from niksnaks_hosting.gtk_ui.dialogs.progress_dialog import ProgressDialog
 from niksnaks_hosting.shared.backend.server_manager import ServerInfo, ServerManager
-from niksnaks_hosting.shared.utils.constants import get_loader_display_name, is_bedrock
+from niksnaks_hosting.shared.utils.constants import LOADER_NEOFORGE, get_loader_display_name, is_bedrock
 from niksnaks_hosting.shared.utils.deletion import (
     TRASH_DIR_NAME,
     delete_registered,
@@ -40,6 +40,10 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
         self._curseforge_page = None
         self._curseforge_header = None
         self._curseforge_row: Adw.ActionRow | None = None
+        self._neoforge_row: Adw.ActionRow | None = None
+        # Empty means the modpack browser follows the server's own loader; a loader tab
+        # pins it to one instead.
+        self._curseforge_loader_override = ""
 
         self._worlds_group: Adw.PreferencesGroup | None = None
         self._mods_group: Adw.PreferencesGroup | None = None
@@ -125,6 +129,16 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
         modrinth_row.connect("activated", self._push_modrinth_page)
         self._mods_group.add(modrinth_row)
 
+        neoforge_row = Adw.ActionRow(
+            title=_("NeoForge"),
+            subtitle=_("NeoForge modpacks"),
+        )
+        neoforge_row.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
+        neoforge_row.set_activatable(True)
+        neoforge_row.connect("activated", self._push_neoforge_page)
+        self._neoforge_row = neoforge_row
+        self._mods_group.add(neoforge_row)
+
         curseforge_row = Adw.ActionRow(
             title=_("CurseForge"),
             subtitle=_("Modpacks for this server"),
@@ -170,6 +184,8 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
         self._pop_to_root()
         self._server_info = server_info
         self._server_manager = server_manager
+        # Any browser pinned to a loader belonged to the server just left behind.
+        self._curseforge_loader_override = ""
         self._worlds_snapshot = tuple()
         self._disabled_snapshot = tuple()
 
@@ -178,17 +194,37 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
         if self._mods_group:
             self._mods_group.set_visible(not is_bedrock(server_info.edition))
 
-        # The browser only ever shows packs this server can actually run, so say so up front.
+        self._refresh_modpack_row_subtitles()
+        self._refresh_backups_row_subtitle()
+        self._rebuild_lists()
+
+    def _refresh_modpack_row_subtitles(self) -> None:
+        """Say up front what each modpack browser will show.
+
+        The CurseForge row follows the server, so it only ever lists packs that server
+        can run. The NeoForge row is pinned to NeoForge whatever the server runs, so it
+        names the loader it will offer to switch to rather than the one in use.
+        """
+        if not self._server_info:
+            return
+
+        mc_version = self._server_info.mc_version
+
         if self._curseforge_row:
-            loader_name = get_loader_display_name(server_info.loader_type)
+            loader_name = get_loader_display_name(self._server_info.loader_type)
             self._curseforge_row.set_subtitle(
-                _("Modpacks for Minecraft {} on {}").format(server_info.mc_version, loader_name)
-                if server_info.mc_version
+                _("Modpacks for Minecraft {} on {}").format(mc_version, loader_name)
+                if mc_version
                 else _("Modpacks for {}").format(loader_name)
             )
 
-        self._refresh_backups_row_subtitle()
-        self._rebuild_lists()
+        if self._neoforge_row:
+            neoforge_name = get_loader_display_name(LOADER_NEOFORGE)
+            self._neoforge_row.set_subtitle(
+                _("{} modpacks for Minecraft {}").format(neoforge_name, mc_version)
+                if mc_version
+                else _("{} modpacks").format(neoforge_name)
+            )
 
     def refresh_worlds_if_changed(self, force: bool = False) -> None:
         if not self._server_info:

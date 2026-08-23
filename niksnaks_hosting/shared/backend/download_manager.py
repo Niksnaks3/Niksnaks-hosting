@@ -16,10 +16,18 @@ from niksnaks_hosting.shared.utils.constants import (
     FORGE_VERSIONS_URL,
     LOADER_FABRIC,
     LOADER_FORGE,
+    LOADER_NEOFORGE,
+    NEOFORGE_LEGACY_VERSIONS_URL,
+    NEOFORGE_VERSIONS_URL,
     TEMP_DIR,
     get_fabric_loader_versions_url,
     get_forge_full_version,
     get_forge_installer_url,
+    get_loader_display_name,
+    get_neoforge_installer_url,
+    is_legacy_neoforge_version,
+    is_neoforge_beta,
+    neoforge_mc_version,
     normalize_loader,
     parse_mc_version,
 )
@@ -63,6 +71,19 @@ def default_loader_option_index(options: list[LoaderVersionOption]) -> int:
 def _forge_build_sort_key(build: str) -> tuple[int, ...]:
     return tuple(int(part) for part in re.findall(r"\d+", str(build or "")))
 
+def _maven_versions(url: str, label: str) -> list[str]:
+    """Every version listed in a maven-metadata.xml, in the order the repository gives them."""
+    try:
+        resp = requests.get(url, timeout=20)
+        resp.raise_for_status()
+        import xml.etree.ElementTree as ET
+
+        root = ET.fromstring(resp.content)
+        return [v.text.strip() for v in root.findall("./versioning/versions/version") if v.text]
+    except Exception as e:
+        print(f"Failed to fetch {label} metadata: {e}")
+        return []
+
 class DownloadManager:
     def __init__(self):
         self._game_versions: list[dict] = []
@@ -73,6 +94,7 @@ class DownloadManager:
         self._mojang_manifest: dict | None = None
         self._forge_metadata: dict[str, list[str]] | None = None
         self._forge_promotions: dict[str, str] | None = None
+        self._neoforge_metadata: dict[str, list[str]] | None = None
         self._fabric_loaders_by_game: dict[str, list[tuple[str, bool]]] = {}
 
     def fetch_game_versions(self, include_snapshots: bool = False) -> list[str]:
@@ -354,15 +376,8 @@ class DownloadManager:
         if self._forge_metadata is not None:
             return self._forge_metadata
 
-        try:
-            resp = requests.get(FORGE_VERSIONS_URL, timeout=20)
-            resp.raise_for_status()
-            import xml.etree.ElementTree as ET
-
-            root = ET.fromstring(resp.content)
-            raw_versions = [v.text.strip() for v in root.findall("./versioning/versions/version") if v.text]
-        except Exception as e:
-            print(f"Failed to fetch Forge metadata: {e}")
+        raw_versions = _maven_versions(FORGE_VERSIONS_URL, "Forge")
+        if not raw_versions:
             self._forge_metadata = {}
             return self._forge_metadata
 
@@ -394,6 +409,82 @@ class DownloadManager:
         grouped = self._fetch_forge_metadata()
         return list(grouped.get(mc_version, []))
 
+    def _fetch_neoforge_metadata(self) -> dict[str, list[str]]:
+        """Every NeoForge build, grouped by the Minecraft version it targets, newest first."""
+        if self._neoforge_metadata is not None:
+            return self._neoforge_metadata
+
+        raw_versions = _maven_versions(NEOFORGE_VERSIONS_URL, "NeoForge")
+        # The 1.20.1 artifact prefixes its versions with the game version. One build was
+        # published without that prefix, and it would read as a Minecraft that never
+        # existed, so only properly named entries are taken.
+        raw_versions += [
+            version
+            for version in _maven_versions(NEOFORGE_LEGACY_VERSIONS_URL, "NeoForge 1.20.1")
+            if is_legacy_neoforge_version(version)
+        ]
+        if not raw_versions:
+            self._neoforge_metadata = {}
+            return self._neoforge_metadata
+
+        grouped: dict[str, list[str]] = {}
+        for version in raw_versions:
+            # Builds for Minecraft snapshots name no released game version and are skipped.
+            mc_version = neoforge_mc_version(version)
+            if mc_version:
+                grouped.setdefault(mc_version, []).append(version)
+
+        for versions in grouped.values():
+            versions.sort(key=_forge_build_sort_key, reverse=True)
+
+        self._neoforge_metadata = grouped
+        return grouped
+
+    def fetch_neoforge_game_versions(self) -> list[str]:
+        grouped = self._fetch_neoforge_metadata()
+        versions = list(grouped.keys())
+        versions.sort(key=lambda v: parse_mc_version(v) or (0, 0, 0), reverse=True)
+        return versions
+
+    def fetch_neoforge_versions(self, mc_version: str) -> list[str]:
+        return list(self._fetch_neoforge_metadata().get(mc_version, []))
+
+    def get_neoforge_recommended_version(self, mc_version: str) -> str | None:
+        """NeoForge runs no promotions file, so the newest stable build is the safe pick."""
+        versions = self.fetch_neoforge_versions(mc_version)
+        if not versions:
+            return None
+        stable = next((v for v in versions if not is_neoforge_beta(v)), None)
+        return stable or versions[0]
+
+    def get_neoforge_latest_version(self, mc_version: str) -> str | None:
+        versions = self.fetch_neoforge_versions(mc_version)
+        return versions[0] if versions else None
+
+    def download_neoforge_installer(
+        self,
+        version: str,
+        progress_callback: Callable[[float, str], None] | None = None,
+    ) -> str | None:
+        return self._download_installer_jar(
+            get_neoforge_installer_url(version),
+            CACHE_DIR / f"neoforge-installer-{version}.jar",
+            get_loader_display_name(LOADER_NEOFORGE),
+            progress_callback,
+        )
+
+    def install_neoforge_server(
+        self,
+        java_path: str,
+        installer_jar: str,
+        mc_version: str,
+        server_dir: str,
+        progress_callback: Callable[[float, str], None] | None = None,
+    ) -> tuple[bool, str]:
+        return self._install_loader_server(
+            LOADER_NEOFORGE, java_path, installer_jar, mc_version, server_dir, progress_callback
+        )
+
     def _fetch_forge_promotions(self) -> dict[str, str]:
         if self._forge_promotions is not None:
             return self._forge_promotions
@@ -421,7 +512,9 @@ class DownloadManager:
         if not mc_version:
             return []
 
-        if normalize_loader(loader_type) == LOADER_FORGE:
+        loader = normalize_loader(loader_type)
+
+        if loader == LOADER_FORGE:
             builds = self.fetch_forge_builds(mc_version)
             if not builds:
                 return []
@@ -431,6 +524,20 @@ class DownloadManager:
             return [
                 LoaderVersionOption(build, recommended=build == recommended, latest=build == latest)
                 for build in builds
+            ]
+
+        if loader == LOADER_NEOFORGE:
+            versions = self.fetch_neoforge_versions(mc_version)
+            if not versions:
+                return []
+            recommended = self.get_neoforge_recommended_version(mc_version) or ""
+            return [
+                LoaderVersionOption(
+                    version,
+                    recommended=version == recommended,
+                    latest=index == 0 and version != recommended,
+                )
+                for index, version in enumerate(versions)
             ]
 
         entries = self.fetch_fabric_loader_versions(mc_version)
@@ -466,9 +573,21 @@ class DownloadManager:
         full_version: str,
         progress_callback: Callable[[float, str], None] | None = None,
     ) -> str | None:
+        return self._download_installer_jar(
+            get_forge_installer_url(full_version),
+            CACHE_DIR / f"forge-installer-{full_version}.jar",
+            get_loader_display_name(LOADER_FORGE),
+            progress_callback,
+        )
 
-        url = get_forge_installer_url(full_version)
-        cached_jar = CACHE_DIR / f"forge-installer-{full_version}.jar"
+    def _download_installer_jar(
+        self,
+        url: str,
+        cached_jar: Path,
+        loader_name: str,
+        progress_callback: Callable[[float, str], None] | None = None,
+    ) -> str | None:
+
         if cached_jar.exists():
             if progress_callback:
                 progress_callback(1.0, _("Using cached installer"))
@@ -476,7 +595,7 @@ class DownloadManager:
 
         try:
             if progress_callback:
-                progress_callback(0.0, _("Downloading Forge installer..."))
+                progress_callback(0.0, _("Downloading {} installer...").format(loader_name))
 
             resp = requests.get(url, stream=True, timeout=60)
             resp.raise_for_status()
@@ -498,7 +617,7 @@ class DownloadManager:
             return str(cached_jar)
 
         except Exception as e:
-            print(f"Failed to download Forge installer: {e}")
+            print(f"Failed to download {loader_name} installer: {e}")
             cached_jar.unlink(missing_ok=True)
             return None
 
@@ -511,13 +630,28 @@ class DownloadManager:
         server_dir: str,
         progress_callback: Callable[[float, str], None] | None = None,
     ) -> tuple[bool, str]:
+        return self._install_loader_server(
+            LOADER_FORGE, java_path, installer_jar, mc_version, server_dir, progress_callback
+        )
+
+    def _install_loader_server(
+        self,
+        loader_type: str,
+        java_path: str,
+        installer_jar: str,
+        mc_version: str,
+        server_dir: str,
+        progress_callback: Callable[[float, str], None] | None = None,
+    ) -> tuple[bool, str]:
+        """Run a Forge or NeoForge installer, which build a server folder the same way."""
 
         import subprocess
 
+        loader_name = get_loader_display_name(loader_type)
         Path(server_dir).mkdir(parents=True, exist_ok=True)
 
         if progress_callback:
-            progress_callback(0.3, _("Installing Forge server for MC {}...").format(mc_version))
+            progress_callback(0.3, _("Installing {} server for MC {}...").format(loader_name, mc_version))
 
         cmd = [java_path, f"-Djava.io.tmpdir={TEMP_DIR}", "-jar", installer_jar, "--installServer"]
 
@@ -531,20 +665,21 @@ class DownloadManager:
                 **hidden_subprocess_kwargs(),
             )
 
-            for log in Path(server_dir).glob("forge*installer*.jar.log"):
-                try:
-                    log.unlink(missing_ok=True)
-                except Exception:
-                    pass
+            for pattern in ("forge*installer*.jar.log", "neoforge*installer*.jar.log"):
+                for log in Path(server_dir).glob(pattern):
+                    try:
+                        log.unlink(missing_ok=True)
+                    except Exception:
+                        pass
 
-            if result.returncode == 0 and is_loader_installed(server_dir, LOADER_FORGE):
+            if result.returncode == 0 and is_loader_installed(server_dir, loader_type):
                 if progress_callback:
-                    progress_callback(1.0, _("Forge server installed successfully"))
+                    progress_callback(1.0, _("{} server installed successfully").format(loader_name))
                 return True, _("Installation successful")
             else:
                 error_msg = result.stderr or result.stdout or _("Unknown error")
-                if result.returncode == 0 and not is_loader_installed(server_dir, LOADER_FORGE):
-                    return False, _("Installation completed but Forge server files were not found")
+                if result.returncode == 0:
+                    return False, _("Installation completed but {} server files were not found").format(loader_name)
                 return False, _("Installation failed: {}").format(error_msg)
 
         except subprocess.TimeoutExpired:
@@ -553,8 +688,11 @@ class DownloadManager:
             return False, _("Installation error: {}").format(e)
 
     def fetch_game_versions_for_loader(self, loader_type: str) -> list[str]:
-        if normalize_loader(loader_type) == LOADER_FORGE:
+        loader = normalize_loader(loader_type)
+        if loader == LOADER_FORGE:
             return self.fetch_forge_game_versions()
+        if loader == LOADER_NEOFORGE:
+            return self.fetch_neoforge_game_versions()
         return self.fetch_game_versions()
 
     def fetch_game_versions_for_loader_async(

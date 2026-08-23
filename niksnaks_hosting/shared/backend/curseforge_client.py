@@ -15,7 +15,9 @@ from niksnaks_hosting.shared.utils.constants import (
     APP_VERSION,
     LOADER_FABRIC,
     LOADER_FORGE,
+    LOADER_NEOFORGE,
     is_pack_protected_icon,
+    neoforge_mc_version,
     normalize_loader,
 )
 from niksnaks_hosting.shared.utils.net import make_ssl_context
@@ -37,8 +39,8 @@ PROXY_API = "https://api.curse.tools/v1/cf"
 GAME_ID_MINECRAFT = 432
 CLASS_ID_MODPACKS = 4471
 
-# CurseForge numbers its loaders; only the two this app can install are mapped.
-LOADER_TYPE_IDS = {LOADER_FORGE: 1, LOADER_FABRIC: 4}
+# CurseForge numbers its loaders; only the three this app can install are mapped.
+LOADER_TYPE_IDS = {LOADER_FORGE: 1, LOADER_FABRIC: 4, LOADER_NEOFORGE: 6}
 
 SORT_POPULARITY = 2
 SORT_LAST_UPDATED = 3
@@ -472,16 +474,29 @@ def _parse_manifest(zf: zipfile.ZipFile) -> dict[str, Any] | None:
 
 _FORGE_INSTALLER_RE = re.compile(r"^forge-(?P<mc>[\d.]+)-(?P<loader>[\d.]+)-installer\.jar$", re.IGNORECASE)
 
+# NeoForge names its installer after the loader build alone, because that build already
+# spells out the Minecraft version it targets.
+_NEOFORGE_INSTALLER_RE = re.compile(r"^neoforge-(?P<loader>[\d.]+(?:-beta)?)-installer\.jar$", re.IGNORECASE)
+
 
 def _detect_versions_from_installer(server_root: Path) -> tuple[str, str]:
     """A server pack usually ships the loader installer it expects; its name says which."""
     try:
-        for jar in server_root.glob("*-installer.jar"):
-            match = _FORGE_INSTALLER_RE.match(jar.name)
-            if match:
-                return match.group("mc"), match.group("loader")
+        jars = sorted(server_root.glob("*-installer.jar"))
     except OSError:
-        pass
+        return "", ""
+
+    for jar in jars:
+        match = _NEOFORGE_INSTALLER_RE.match(jar.name)
+        if match:
+            loader_version = match.group("loader")
+            return neoforge_mc_version(loader_version), loader_version
+
+    for jar in jars:
+        match = _FORGE_INSTALLER_RE.match(jar.name)
+        if match:
+            return match.group("mc"), match.group("loader")
+
     return "", ""
 
 

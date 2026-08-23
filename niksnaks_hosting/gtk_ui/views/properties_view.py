@@ -27,7 +27,6 @@ from niksnaks_hosting.shared.utils.constants import (
     DEFAULT_SERVER_PROPERTIES,
     DIFFICULTIES,
     GAMEMODES,
-    LOADER_FORGE,
     MAX_RAM_MB,
     MAX_SERVER_PORT,
     MIN_RAM_MB,
@@ -37,6 +36,7 @@ from niksnaks_hosting.shared.utils.constants import (
     get_loader_display_name,
     get_required_java_version,
     is_bedrock,
+    uses_installer,
 )
 
 DIFFICULTY_MODES = [*DIFFICULTIES, "hardcore"]
@@ -577,7 +577,9 @@ class PropertiesView(Gtk.Box):
         selected_mc = {"value": ""}
         selected_loader = {"value": ""}
         compatibility_plan: dict = {}
-        is_forge = loader_type == LOADER_FORGE
+        # Forge and NeoForge renumber their builds per Minecraft version, so "newer than
+        # what is installed" is meaningless for them and every build stays on offer.
+        rebuilds_versions = uses_installer(loader_type)
         loader_fetch_mc = {"value": ""}
         loader_fetch_gen = {"value": 0}
 
@@ -612,7 +614,7 @@ class PropertiesView(Gtk.Box):
 
         def keep_upgrade_options(options: list[LoaderVersionOption]) -> list[LoaderVersionOption]:
 
-            if is_forge or not installed_loader_version:
+            if rebuilds_versions or not installed_loader_version:
                 return list(options)
 
             newer = [o for o in options if ServerManager.is_version_at_least(o.version, installed_loader_version)]

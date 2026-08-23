@@ -1,9 +1,15 @@
 import re
 from pathlib import Path
+from typing import Any
+
+from niksnaks_hosting.shared.remote.paths import is_remote
 
 class ConfigManager:
-    def __init__(self, server_dir: str | Path):
-        self.server_dir = Path(server_dir)
+    def __init__(self, server_dir: Any):
+        # A folder on another machine arrives as a RemotePath and has to stay one;
+        # rebuilding it as a Path would read this computer's disk at the same
+        # spelling, which is how a remote server ends up silently editing nothing.
+        self.server_dir = server_dir if is_remote(server_dir) else Path(server_dir)
         self.properties_path = self.server_dir / "server.properties"
         self._lines: list[str] = []
         self._properties: dict[str, str] = {}
@@ -17,8 +23,7 @@ class ConfigManager:
             self._loaded = True
             return self._properties
 
-        with open(self.properties_path, encoding="utf-8") as f:
-            self._lines = f.readlines()
+        self._lines = self.properties_path.read_text(encoding="utf-8").splitlines(keepends=True)
 
         for line in self._lines:
             stripped = line.strip()
@@ -60,8 +65,7 @@ class ConfigManager:
                 new_lines.append(f"{key}={value}\n")
 
         self.server_dir.mkdir(parents=True, exist_ok=True)
-        with open(self.properties_path, "w", encoding="utf-8") as f:
-            f.writelines(new_lines)
+        self.properties_path.write_text("".join(new_lines), encoding="utf-8")
 
     def get(self, key: str, default: str = "") -> str:
         if not self._loaded:
@@ -93,5 +97,8 @@ class ConfigManager:
 
     def set_eula(self, accepted: bool = True):
         eula_path = self.server_dir / "eula.txt"
-        with open(eula_path, "w", encoding="utf-8") as f:
-            f.write(f"# Accepted by Niksnaks-Hosting\neula={'true' if accepted else 'false'}\n")
+        self.server_dir.mkdir(parents=True, exist_ok=True)
+        eula_path.write_text(
+            f"# Accepted by Niksnaks-Hosting\neula={'true' if accepted else 'false'}\n",
+            encoding="utf-8",
+        )

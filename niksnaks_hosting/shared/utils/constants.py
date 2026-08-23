@@ -66,13 +66,66 @@ def get_forge_installer_url(full_version: str) -> str:
 def get_forge_full_version(mc_version: str, build: str) -> str:
     return f"{mc_version}-{build}"
 
+# NeoForge publishes two artifacts. Everything from Minecraft 1.20.2 onward lives under
+# net/neoforged/neoforge, while 1.20.1 — the fork's starting point — kept Forge's old
+# net/neoforged/forge coordinates and its mc-prefixed version numbers.
+NEOFORGE_MAVEN_BASE = "https://maven.neoforged.net/releases/net/neoforged/neoforge"
+NEOFORGE_VERSIONS_URL = f"{NEOFORGE_MAVEN_BASE}/maven-metadata.xml"
+NEOFORGE_LEGACY_MAVEN_BASE = "https://maven.neoforged.net/releases/net/neoforged/forge"
+NEOFORGE_LEGACY_VERSIONS_URL = f"{NEOFORGE_LEGACY_MAVEN_BASE}/maven-metadata.xml"
+NEOFORGE_LEGACY_MC_VERSION = "1.20.1"
+
+# A NeoForge version is the Minecraft version it targets with the build number tacked on:
+# 21.1.72 is 1.21.1, 26.2.0.66 is 26.2. Betas are ordinary releases for older Minecraft
+# versions and stay in the list; the alpha and snapshot builds target no released game.
+_NEOFORGE_VERSION_RE = re.compile(r"^(?P<nums>\d+(?:\.\d+){2,3})(?:-beta)?$")
+
+def is_legacy_neoforge_version(version: str) -> bool:
+    return str(version or "").strip().startswith(f"{NEOFORGE_LEGACY_MC_VERSION}-")
+
+def get_neoforge_installer_url(version: str) -> str:
+    version = str(version or "").strip()
+    if is_legacy_neoforge_version(version):
+        return f"{NEOFORGE_LEGACY_MAVEN_BASE}/{version}/forge-{version}-installer.jar"
+    return f"{NEOFORGE_MAVEN_BASE}/{version}/neoforge-{version}-installer.jar"
+
+def neoforge_mc_version(version: str) -> str:
+    """The Minecraft version a NeoForge build targets, read out of its own version number."""
+    version = str(version or "").strip()
+    if is_legacy_neoforge_version(version):
+        return NEOFORGE_LEGACY_MC_VERSION
+
+    match = _NEOFORGE_VERSION_RE.match(version)
+    if not match:
+        return ""
+
+    parts = [int(part) for part in match.group("nums").split(".")]
+    if len(parts) == 3:
+        # The 1.x era dropped the leading "1.", so 21.1.72 means Minecraft 1.21.1.
+        major, minor, patch = 1, parts[0], parts[1]
+    else:
+        major, minor, patch = parts[0], parts[1], parts[2]
+    return f"{major}.{minor}.{patch}" if patch else f"{major}.{minor}"
+
+def is_neoforge_beta(version: str) -> bool:
+    return str(version or "").strip().endswith("-beta")
+
 LOADER_FABRIC = "fabric"
 LOADER_FORGE = "forge"
-SUPPORTED_LOADERS = [LOADER_FABRIC, LOADER_FORGE]
+LOADER_NEOFORGE = "neoforge"
+SUPPORTED_LOADERS = [LOADER_FABRIC, LOADER_FORGE, LOADER_NEOFORGE]
 LOADER_DISPLAY_NAMES = {
     LOADER_FABRIC: "Fabric",
     LOADER_FORGE: "Forge",
+    LOADER_NEOFORGE: "NeoForge",
 }
+
+# Forge and NeoForge both ship a Java installer that writes an args file into libraries/
+# instead of a runnable jar. They share every install, launch and cleanup path.
+INSTALLER_LOADERS = frozenset({LOADER_FORGE, LOADER_NEOFORGE})
+
+def uses_installer(value: str | None) -> bool:
+    return normalize_loader(value) in INSTALLER_LOADERS
 
 def normalize_loader(value: str | None) -> str:
     loader = str(value or "").strip().lower()
@@ -116,16 +169,32 @@ def get_bedrock_download_types() -> tuple[str, str]:
 
 ADOPTIUM_API_BASE = "https://api.adoptium.net/v3/binary/latest"
 
+ADOPTIUM_ARCH_MAP = {
+    "x86_64": "x64",
+    "AMD64": "x64",
+    "amd64": "x64",
+    "arm64": "aarch64",
+    "aarch64": "aarch64",
+    "armv7l": "arm",
+}
+
+def get_adoptium_jre_url_for(java_version: int, os_name: str, machine: str) -> tuple[str, str]:
+    """The runtime for a named platform, for machines other than this one.
+
+    A server on another host needs that host's build, which is rarely the same as the
+    one this app is running on: a Windows desktop managing a Linux box, or an x86
+    laptop managing an ARM board.
+    """
+    arch = ADOPTIUM_ARCH_MAP.get(machine, "x64")
+    archive_type = "zip" if os_name == "windows" else "tar.gz"
+    url = f"{ADOPTIUM_API_BASE}/{java_version}/ga/{os_name}/{arch}/jre/hotspot/normal/eclipse"
+    return url, archive_type
+
 def get_adoptium_jre_download_info(java_version: int) -> tuple[str, str]:
     import platform
 
     machine = platform.machine()
-    arch_map = {
-        "x86_64": "x64",
-        "AMD64": "x64",
-        "arm64": "aarch64",
-        "aarch64": "aarch64",
-    }
+    arch_map = ADOPTIUM_ARCH_MAP
     arch = arch_map.get(machine, "x64")
 
     if sys.platform == "win32":

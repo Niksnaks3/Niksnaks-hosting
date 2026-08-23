@@ -210,6 +210,10 @@ class NiksnaksHostingApplication(Adw.Application):
         action_prefs.connect("activate", self._on_preferences)
         self.add_action(action_prefs)
 
+        action_hosts = Gio.SimpleAction.new("hosts", None)
+        action_hosts.connect("activate", self._on_hosts)
+        self.add_action(action_hosts)
+
         action_shortcuts = Gio.SimpleAction.new("shortcuts", None)
         action_shortcuts.connect("activate", self._on_shortcuts)
         self.add_action(action_shortcuts)
@@ -270,6 +274,13 @@ class NiksnaksHostingApplication(Adw.Application):
 
         if self._window:
             show_preferences_window(self._window, self._server_manager.preferences, self._server_manager)
+
+    def _on_hosts(self, action, param):
+        from niksnaks_hosting.gtk_ui.dialogs.hosts import show_hosts_dialog
+        from niksnaks_hosting.shared.remote.hosts_manager import get_hosts_manager
+
+        if self._window:
+            show_hosts_dialog(self._window, get_hosts_manager())
 
     def _on_shortcuts(self, action, param):
         if not self._window:

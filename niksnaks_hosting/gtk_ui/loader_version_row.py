@@ -8,7 +8,7 @@ from niksnaks_hosting.shared.backend.download_manager import (
     LoaderVersionOption,
     default_loader_option_index,
 )
-from niksnaks_hosting.shared.utils.constants import LOADER_FORGE, normalize_loader
+from niksnaks_hosting.shared.utils.constants import get_loader_display_name, uses_installer
 
 def build_loader_version_row() -> Adw.ComboRow:
 
@@ -72,6 +72,7 @@ def selected_loader_version(row: Adw.ComboRow, options: list[LoaderVersionOption
     return ""
 
 def _no_versions_subtitle(loader_type: str, mc_version: str) -> str:
-    if normalize_loader(loader_type) == LOADER_FORGE:
-        return _("No Forge build for MC {}").format(mc_version)
-    return _("No Fabric loader for MC {}").format(mc_version)
+    name = get_loader_display_name(loader_type)
+    if uses_installer(loader_type):
+        return _("No {} build for MC {}").format(name, mc_version)
+    return _("No {} loader for MC {}").format(name, mc_version)

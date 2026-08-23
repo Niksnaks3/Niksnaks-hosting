@@ -29,6 +29,7 @@ from niksnaks_hosting.shared.utils.constants import (
     LEVEL_TYPES,
     LOADER_FABRIC,
     LOADER_FORGE,
+    LOADER_NEOFORGE,
     MAX_RAM_MB,
     MAX_SERVER_PORT,
     MIN_RAM_MB,
@@ -40,6 +41,7 @@ from niksnaks_hosting.shared.utils.constants import (
     get_required_java_version,
     is_bedrock,
     normalize_loader,
+    uses_installer,
 )
 from niksnaks_hosting.shared.utils.image_utils import convert_to_png
 
@@ -61,6 +63,23 @@ FORGE_OPTIMISATION_MODS = [
     ("embeddium", _("Embeddium")),
     ("spark", _("spark")),
 ]
+
+# Canary is Lithium's Forge port and Embeddium only helps a client, so NeoForge servers
+# take Lithium itself plus the tuning mods that publish a NeoForge build.
+NEOFORGE_OPTIMISATION_MODS = [
+    ("lithium", _("Lithium")),
+    ("ferrite-core", _("FerriteCore")),
+    ("modernfix", _("ModernFix")),
+    ("scalablelux", _("ScalableLux")),
+    ("noisium", _("Noisium")),
+    ("spark", _("spark")),
+]
+
+OPTIMISATION_MODS_BY_LOADER = {
+    LOADER_FABRIC: FABRIC_OPTIMISATION_MODS,
+    LOADER_FORGE: FORGE_OPTIMISATION_MODS,
+    LOADER_NEOFORGE: NEOFORGE_OPTIMISATION_MODS,
+}
 
 LOADER_LABELS = [get_loader_display_name(loader) for loader in SUPPORTED_LOADERS]
 
@@ -290,6 +309,15 @@ class CreateServerDialog(Adw.Dialog):
         )
         version_group = self._version_group
 
+        self._host_row = Adw.ComboRow(
+            title=_("Runs on"),
+            subtitle=_("This computer, or a machine you added under Hosts"),
+        )
+        self._host_ids: list[str] = []
+        self._refresh_host_row()
+        self._host_row.connect("notify::selected", self._on_host_changed)
+        version_group.add(self._host_row)
+
         self._edition_row = Adw.ComboRow(
             title=_("Edition"),
             subtitle=_("Java Edition supports mods; Bedrock is the console and mobile edition"),
@@ -302,7 +330,7 @@ class CreateServerDialog(Adw.Dialog):
             title=_("Mod loader"),
             model=Gtk.StringList.new(LOADER_LABELS),
         )
-        self._loader_row.set_tooltip_text(_("Fabric and Forge servers are supported"))
+        self._loader_row.set_tooltip_text(_("Fabric, Forge and NeoForge servers are supported"))
         self._loader_row.connect("notify::selected", self._on_loader_changed)
         version_group.add(self._loader_row)
 
@@ -413,6 +441,34 @@ class CreateServerDialog(Adw.Dialog):
 
         box.append(self._progress_status)
         return box
+
+    def _refresh_host_row(self) -> None:
+        from niksnaks_hosting.shared.remote.hosts_manager import get_hosts_manager
+
+        hosts = get_hosts_manager().all_hosts()
+        self._host_ids = [host.id for host in hosts]
+        self._host_row.set_model(Gtk.StringList.new([host.name for host in hosts]))
+        self._host_row.set_selected(0)
+        # With nowhere else to put a server, the choice is not a choice.
+        self._host_row.set_visible(len(hosts) > 1)
+
+    def _selected_host_id(self) -> str:
+        idx = self._host_row.get_selected()
+        if 0 <= idx < len(self._host_ids):
+            return self._host_ids[idx]
+        return ""
+
+    def _on_host_changed(self, *_args) -> None:
+        # Bedrock servers are not installed remotely yet, so a remote host offers Java only.
+        remote = bool(self._selected_host_id())
+        if remote and self._edition_row.get_selected() != 0:
+            self._edition_row.set_selected(0)
+        self._edition_row.set_sensitive(not remote)
+        self._edition_row.set_subtitle(
+            _("Remote hosts run Java Edition servers")
+            if remote
+            else _("Java Edition supports mods; Bedrock is the console and mobile edition")
+        )
 
     def _selected_loader(self) -> str:
         idx = self._loader_row.get_selected()
@@ -1050,6 +1106,7 @@ class CreateServerDialog(Adw.Dialog):
                 self._world_import_source_path,
                 install_optimisations,
                 port,
+                self._selected_host_id(),
             ),
             daemon=True,
         )
@@ -1166,9 +1223,17 @@ class CreateServerDialog(Adw.Dialog):
         world_import_source_path,
         install_optimisations,
         port,
+        host_id="",
     ):
 
         try:
+            if host_id:
+                self._install_remote_thread(
+                    host_id, name, mc_version, loader_version, loader_type, ram_mb, java_version,
+                    seed, difficulty, hardcore_mode, gamemode, level_type, install_optimisations, port,
+                )
+                return
+
             java_ver = java_version
             java_mgr = self._server_manager.java_manager
             dl_mgr = self._server_manager.download_manager
@@ -1194,21 +1259,30 @@ class CreateServerDialog(Adw.Dialog):
             if not java_path:
                 java_path = java_mgr.get_java_for_mc(mc_version) or "java"
 
-            if loader_type == LOADER_FORGE:
+            if uses_installer(loader_type):
+                loader_name = get_loader_display_name(loader_type)
+
                 if not loader_version:
-                    self._show_error(_("No Forge build available for Minecraft {}").format(mc_version))
+                    self._show_error(
+                        _("No {} build available for Minecraft {}").format(loader_name, mc_version)
+                    )
                     return
 
-                self._update_progress(0.28, _("Downloading Forge installer..."), "")
-                from niksnaks_hosting.shared.utils.constants import get_forge_full_version
+                self._update_progress(0.28, _("Downloading {} installer...").format(loader_name), "")
+                if loader_type == LOADER_NEOFORGE:
+                    installer_path = dl_mgr.download_neoforge_installer(
+                        loader_version,
+                        progress_callback=lambda frac, msg: self._update_progress(0.28 + frac * 0.14, msg, ""),
+                    )
+                else:
+                    from niksnaks_hosting.shared.utils.constants import get_forge_full_version
 
-                full_version = get_forge_full_version(mc_version, loader_version)
-                installer_path = dl_mgr.download_forge_installer(
-                    full_version,
-                    progress_callback=lambda frac, msg: self._update_progress(0.28 + frac * 0.14, msg, ""),
-                )
+                    installer_path = dl_mgr.download_forge_installer(
+                        get_forge_full_version(mc_version, loader_version),
+                        progress_callback=lambda frac, msg: self._update_progress(0.28 + frac * 0.14, msg, ""),
+                    )
                 if not installer_path:
-                    self._show_error(_("Failed to download Forge installer"))
+                    self._show_error(_("Failed to download {} installer").format(loader_name))
                     return
 
                 self._update_progress(0.44, _("Creating server..."), "")
@@ -1221,18 +1295,29 @@ class CreateServerDialog(Adw.Dialog):
                     loader_type=loader_type,
                 )
 
-                self._update_progress(0.48, _("Installing Forge server..."), _("MC {}").format(mc_version))
-                success, msg = dl_mgr.install_forge_server(
-                    java_path=java_path,
-                    installer_jar=installer_path,
-                    mc_version=mc_version,
-                    forge_build=loader_version,
-                    server_dir=str(server_info.server_dir),
-                    progress_callback=lambda frac, msg: self._update_progress(0.48 + frac * 0.38, msg, ""),
+                self._update_progress(
+                    0.48, _("Installing {} server...").format(loader_name), _("MC {}").format(mc_version)
                 )
+                if loader_type == LOADER_NEOFORGE:
+                    success, msg = dl_mgr.install_neoforge_server(
+                        java_path=java_path,
+                        installer_jar=installer_path,
+                        mc_version=mc_version,
+                        server_dir=str(server_info.server_dir),
+                        progress_callback=lambda frac, msg: self._update_progress(0.48 + frac * 0.38, msg, ""),
+                    )
+                else:
+                    success, msg = dl_mgr.install_forge_server(
+                        java_path=java_path,
+                        installer_jar=installer_path,
+                        mc_version=mc_version,
+                        forge_build=loader_version,
+                        server_dir=str(server_info.server_dir),
+                        progress_callback=lambda frac, msg: self._update_progress(0.48 + frac * 0.38, msg, ""),
+                    )
 
                 if not success:
-                    self._show_error(_("Forge installation failed: {}").format(msg))
+                    self._show_error(_("{} installation failed: {}").format(loader_name, msg))
                     return
 
             else:
@@ -1327,13 +1412,112 @@ class CreateServerDialog(Adw.Dialog):
         except Exception as e:
             self._show_error(_("Unexpected error: {}").format(e))
 
-    def _install_optimising_mods(self, server_dir: Path, mc_version: str, loader_type: str) -> None:
+    def _install_remote_thread(
+        self,
+        host_id,
+        name,
+        mc_version,
+        loader_version,
+        loader_type,
+        ram_mb,
+        java_version,
+        seed,
+        difficulty,
+        hardcore_mode,
+        gamemode,
+        level_type,
+        install_optimisations,
+        port,
+    ):
+        """Build the server on the host: its runtime, its loader and its settings."""
+        from niksnaks_hosting.shared.backend.config_manager import ConfigManager
+        from niksnaks_hosting.shared.remote.hosts_manager import get_hosts_manager
+        from niksnaks_hosting.shared.remote.remote_install import install_remote_server
+
+        hosts = get_hosts_manager()
+        host = hosts.get(host_id)
+        if host is None:
+            self._show_error(_("That host is no longer set up in this app."))
+            return
+
+        loader_type = normalize_loader(loader_type)
+        java_ver = java_version or get_required_java_version(mc_version)
+
+        self._update_progress(0.04, _("Checking {}…").format(host.name), "")
+        try:
+            ready, detail = host.check_ready()
+        except Exception as e:
+            ready, detail = False, str(e)
+        if not ready:
+            self._show_error(detail)
+            return
+
+        from niksnaks_hosting.shared.remote.systemd_service import ensure_user_manager
+
+        linger_ok, linger_detail = ensure_user_manager(host)
+        if not linger_ok:
+            self._show_error(linger_detail)
+            return
+
+        self._update_progress(0.10, _("Creating server on {}…").format(host.name), "")
+        try:
+            server_info = self._server_manager.add_server(
+                name=name,
+                mc_version=mc_version,
+                loader_version=loader_version,
+                ram_mb=ram_mb,
+                java_version=java_ver,
+                loader_type=loader_type,
+                host_id=host_id,
+            )
+        except Exception as e:
+            self._show_error(_("Could not create the server on {}: {}").format(host.name, e))
+            return
+
+        try:
+            install_remote_server(
+                host=host,
+                server_dir=str(server_info.server_dir),
+                mc_version=mc_version,
+                loader_type=loader_type,
+                loader_version=loader_version,
+                java_version=java_ver,
+                progress=lambda f, text: self._update_progress(0.12 + f * 0.74, text, ""),
+            )
+        except Exception as e:
+            self._show_error(str(e))
+            return
+
+        self._update_progress(0.88, _("Applying server settings…"), "")
+        try:
+            config = ConfigManager(server_info.server_dir)
+            config.load()
+            config.set_value("motd", DEFAULT_SERVER_PROPERTIES.get("motd", "a Niksnaks-Hosting server"))
+            config.set_value("difficulty", difficulty)
+            config.set_value("hardcore", bool(hardcore_mode))
+            config.set_value("gamemode", gamemode)
+            config.set_value("level-type", level_type)
+            config.set_value("level-seed", seed)
+            config.set_value("server-port", port)
+            config.save()
+            config.set_eula(True)
+        except Exception as e:
+            self._show_error(_("The server was installed but its settings could not be written: {}").format(e))
+            return
+
+        if install_optimisations:
+            self._update_progress(0.94, _("Installing server-optimising mods…"), "0/0")
+            self._install_optimising_mods(server_info.server_dir, mc_version, loader_type, host=host)
+
+        self._show_success(server_info.id)
+
+    def _install_optimising_mods(self, server_dir: Path, mc_version: str, loader_type: str, host=None) -> None:
         from niksnaks_hosting.shared.backend import modrinth_client
 
         loader_type = normalize_loader(loader_type)
-        optimisation_mods = FORGE_OPTIMISATION_MODS if loader_type == LOADER_FORGE else FABRIC_OPTIMISATION_MODS
+        optimisation_mods = OPTIMISATION_MODS_BY_LOADER[loader_type]
 
-        mods_dir = Path(server_dir) / "mods"
+        mods_dir = (server_dir if host is not None else Path(server_dir)) / "mods"
         mods_dir.mkdir(parents=True, exist_ok=True)
         installed = {p.name.lower() for p in mods_dir.glob("*.jar")}
 
@@ -1356,7 +1540,11 @@ class CreateServerDialog(Adw.Dialog):
                     continue
                 if version.filename.lower() in installed:
                     continue
-                modrinth_client.download_to(version.download_url, mods_dir / version.filename)
+                if host is not None:
+                    # The host pulls the jar itself; it never passes through this machine.
+                    host.fetch_url(version.download_url, str(mods_dir / version.filename))
+                else:
+                    modrinth_client.download_to(version.download_url, mods_dir / version.filename)
                 installed.add(version.filename.lower())
                 self._record_optimisation_mod_install(server_dir, version, title)
             except Exception:
@@ -1365,11 +1553,13 @@ class CreateServerDialog(Adw.Dialog):
     def _record_optimisation_mod_install(self, server_dir: Path, version, title: str) -> None:
         import json
 
-        state_path = Path(server_dir) / ".niksnaks-hosting-mod-installs.json"
+        from niksnaks_hosting.shared.remote.paths import is_remote
+
+        root = server_dir if is_remote(server_dir) else Path(server_dir)
+        state_path = root / ".niksnaks-hosting-mod-installs.json"
         try:
             if state_path.exists():
-                with open(state_path, encoding="utf-8") as f:
-                    state = json.load(f)
+                state = json.loads(state_path.read_text(encoding="utf-8"))
             else:
                 state = {}
             mods = state.setdefault("mods", {})
@@ -1380,8 +1570,7 @@ class CreateServerDialog(Adw.Dialog):
                 "filename": version.filename,
             }
             state_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(state_path, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2)
+            state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
         except Exception:
             pass
 

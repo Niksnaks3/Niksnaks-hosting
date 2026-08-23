@@ -89,6 +89,11 @@ hiddenimports = (
         "cairo",
         "PIL._imaging",
     ]
+    # paramiko loads its key and cipher backends by name at runtime, so PyInstaller
+    # cannot see them from the imports alone and SSH would fail only once frozen.
+    + collect_submodules("paramiko")
+    + collect_submodules("cryptography")
+    + ["nacl", "bcrypt", "cffi", "_cffi_backend"]
 )
 
 # --- GTK / GObject shared libraries -----------------------------------------

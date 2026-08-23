@@ -51,21 +51,28 @@ graphs in the same window.
 - **Java or Bedrock** — pick the edition when you create the server. Bedrock uses Mojang's
   Bedrock Dedicated Server and gets the same console, backups, allow list, and properties
   editor, tuned to Bedrock's own settings.
-- **Version & loader picker** — choose a Minecraft version, then any **Fabric** or **Forge**
-  build published for it, with the recommended one preselected.
+- **Version & loader picker** — choose a Minecraft version, then any **Fabric**, **Forge**, or
+  **NeoForge** build published for it, with the recommended one preselected.
 - **Choose your port** — every server gets its own port, so you can run several side by side.
   The app suggests the next free one and warns you before two servers collide.
 - **Optional performance mods** — flip one switch at creation time to install compatible
   optimisation mods.
 - **Start from a backup** — build a brand-new server straight out of a full backup, which
   doubles as a way to clone an existing one.
+- **Run on another machine** — add a host over SSH and create servers on it. The app
+  installs Java and the loader there, runs each server as a systemd user service, and
+  streams its console back. Servers keep running on the host after you close the app,
+  and are picked up again next time you open it.
 
 ### Mods, modpacks & worlds
 
 - **Modrinth browser** — search, filter, and install mods, modpacks, and datapacks from
   inside the app, with required dependencies resolved and installed for you.
-- **CurseForge modpacks** — install packs from CurseForge, preferring the author's server
-  pack when one was published.
+- **CurseForge modpacks** — install Fabric, Forge, and NeoForge packs from CurseForge in one
+  click, preferring the author's server pack when one was published.
+- **NeoForge tab** — its own browser for NeoForge packs, whatever loader the server runs. A
+  pack never installs onto the wrong loader: the app asks first, and switches the server
+  over only if you say so.
 - **One-click updates** — check every installed mod, modpack, and datapack for newer builds
   and apply them together.
 - **Progress you can see** — installs and restores show a real progress bar with per-file
