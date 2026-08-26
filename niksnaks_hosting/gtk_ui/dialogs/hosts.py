@@ -8,6 +8,12 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk
 
+from niksnaks_hosting.gtk_ui.host_form import (
+    add_host_and_verify,
+    build_host_form,
+    host_draft,
+    host_form_error,
+)
 from niksnaks_hosting.shared.remote.hosts_manager import HostsManager
 from niksnaks_hosting.shared.remote.ssh_client import SshError
 
@@ -126,37 +132,8 @@ def _show_add_host(parent, hosts: HostsManager, on_done) -> None:
     dialog.set_heading(_("Add a host"))
     dialog.set_body(_("Niksnaks-Hosting connects over SSH and installs what it needs."))
 
-    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-    listbox = Gtk.ListBox()
-    listbox.add_css_class("boxed-list")
-    listbox.set_selection_mode(Gtk.SelectionMode.NONE)
-
-    name_row = Adw.EntryRow(title=_("Name"))
-    host_row = Adw.EntryRow(title=_("Address"))
-    port_row = Adw.EntryRow(title=_("Port"))
-    port_row.set_text("22")
-    user_row = Adw.EntryRow(title=_("Username"))
-    password_row = Adw.PasswordEntryRow(title=_("Password"))
-    key_row = Adw.EntryRow(title=_("Private key file (optional)"))
-
-    for row in (name_row, host_row, port_row, user_row, password_row, key_row):
-        listbox.append(row)
-    box.append(listbox)
-
-    hint = Gtk.Label(
-        label=_(
-            "Leave the password empty to use a key or your SSH agent. A password is kept "
-            "for this session only and is never written to disk."
-        )
-    )
-    hint.add_css_class("caption")
-    hint.add_css_class("dim-label")
-    hint.set_wrap(True)
-    hint.set_xalign(0.0)
-    hint.set_margin_top(6)
-    box.append(hint)
-
-    dialog.set_extra_child(box)
+    form = build_host_form()
+    dialog.set_extra_child(form.box)
     dialog.add_response("cancel", _("Cancel"))
     dialog.add_response("add", _("Add and check"))
     dialog.set_response_appearance("add", Adw.ResponseAppearance.SUGGESTED)
@@ -167,44 +144,18 @@ def _show_add_host(parent, hosts: HostsManager, on_done) -> None:
         if response != "add":
             return
 
-        hostname = host_row.get_text().strip()
-        username = user_row.get_text().strip()
-        if not hostname or not username:
-            _alert(parent, _("Missing details"), _("A host needs at least an address and a username."))
+        draft = host_draft(form)
+        if draft is None:
+            _alert(parent, _("Missing details"), host_form_error(form))
             return
 
-        try:
-            port = int(port_row.get_text().strip() or "22")
-        except ValueError:
-            port = 22
+        def finished(host, detail: str) -> None:
+            if host is None:
+                label = draft.name or f"{draft.username}@{draft.hostname}"
+                _alert(parent, _("Could not use {}").format(label), detail)
+            on_done()
 
-        host = hosts.add(
-            name=name_row.get_text().strip(),
-            hostname=hostname,
-            username=username,
-            port=port,
-            password=password_row.get_text(),
-            key_path=key_row.get_text().strip(),
-        )
-
-        def worker() -> None:
-            try:
-                ok, detail = host.check_ready()
-            except Exception as e:
-                ok, detail = False, str(e)
-
-            def finish() -> bool:
-                if ok:
-                    # The key it answered with is trusted from here on.
-                    hosts.trust_current_key(host.id)
-                else:
-                    _alert(parent, _("Could not use {}").format(host.name), detail)
-                on_done()
-                return False
-
-            GLib.idle_add(finish)
-
-        threading.Thread(target=worker, daemon=True).start()
+        add_host_and_verify(hosts, draft, on_step=lambda _text: None, on_done=finished)
 
     dialog.connect("response", on_response)
     dialog.present(parent)

@@ -7,6 +7,14 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, GObject, Gtk
 
+from niksnaks_hosting.gtk_ui.host_form import (
+    add_host_and_verify,
+    build_host_form,
+    connect_host_form_changed,
+    host_draft,
+    host_form_error,
+    set_host_form_editable,
+)
 from niksnaks_hosting.gtk_ui.loader_version_row import (
     build_loader_version_row,
     selected_loader_version,
@@ -89,6 +97,10 @@ DIFFICULTY_MODES = [*DIFFICULTIES, "hardcore"]
 
 COMMON_JAVA_VERSIONS = [8, 11, 16, 17, 21, 25]
 
+# Not a host id: the last entry of the "Runs on" list is a way in to the add-host page.
+# Real host ids are hex (uuid4().hex[:12]) and this computer is "", so neither collides.
+ADD_HOST_SENTINEL = "__add-host__"
+
 class CreateServerDialog(Adw.Dialog):
     __gsignals__ = {
         "server-created": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
@@ -109,6 +121,15 @@ class CreateServerDialog(Adw.Dialog):
         self._port_edited: bool = False
         self._suppress_port_change: bool = False
         self._port_conflict_name: str | None = None
+        # Rebuilding the "Runs on" list re-fires notify::selected, which would otherwise
+        # re-enter _on_host_changed and re-open the add-host page from its own success.
+        self._suppress_host_change: bool = False
+        # Where the picker goes back to when the add-host detour is cancelled.
+        self._last_host_id: str = ""
+        self._host_probe_running: bool = False
+        # Bumped to disown an attempt the user has navigated away from; a connect can
+        # take CONNECT_TIMEOUT (20s), which is long enough to start a second one.
+        self._host_probe_gen: int = 0
         # label, archive path, id of the server it came from ("" when browsed off disk)
         self._backup_choices: list[tuple[str, Path, str]] = []
         self._backup_edition: str = EDITION_JAVA
@@ -143,6 +164,9 @@ class CreateServerDialog(Adw.Dialog):
 
         runtime_page = self._build_runtime_page()
         self._stack.add_named(runtime_page, "runtime")
+
+        addhost_page = self._build_add_host_page()
+        self._stack.add_named(addhost_page, "addhost")
 
         progress_page = self._build_progress_page()
         self._stack.add_named(progress_page, "progress")
@@ -311,7 +335,7 @@ class CreateServerDialog(Adw.Dialog):
 
         self._host_row = Adw.ComboRow(
             title=_("Runs on"),
-            subtitle=_("This computer, or a machine you added under Hosts"),
+            subtitle=_("This computer, or another one you connect to over SSH"),
         )
         self._host_ids: list[str] = []
         self._refresh_host_row()
@@ -442,23 +466,52 @@ class CreateServerDialog(Adw.Dialog):
         box.append(self._progress_status)
         return box
 
-    def _refresh_host_row(self) -> None:
+    def _refresh_host_row(self, select_id: str | None = None) -> None:
         from niksnaks_hosting.shared.remote.hosts_manager import get_hosts_manager
 
-        hosts = get_hosts_manager().all_hosts()
-        self._host_ids = [host.id for host in hosts]
-        self._host_row.set_model(Gtk.StringList.new([host.name for host in hosts]))
-        self._host_row.set_selected(0)
-        # With nowhere else to put a server, the choice is not a choice.
-        self._host_row.set_visible(len(hosts) > 1)
+        # Read the current choice before the id list is replaced under it.
+        target = select_id if select_id is not None else self._selected_host_id()
 
-    def _selected_host_id(self) -> str:
+        hosts = get_hosts_manager().all_hosts()
+        self._host_ids = [host.id for host in hosts] + [ADD_HOST_SENTINEL]
+        labels = [host.name for host in hosts] + [_("Add another computer…")]
+
+        index = 0
+        if target and target != ADD_HOST_SENTINEL and target in self._host_ids:
+            index = self._host_ids.index(target)
+
+        self._suppress_host_change = True
+        try:
+            self._host_row.set_model(Gtk.StringList.new(labels))
+            self._host_row.set_selected(index)
+        finally:
+            self._suppress_host_change = False
+
+    def _raw_selected_host_id(self) -> str:
         idx = self._host_row.get_selected()
         if 0 <= idx < len(self._host_ids):
             return self._host_ids[idx]
         return ""
 
+    def _selected_host_id(self) -> str:
+        # The sentinel is a way in to a page, never somewhere to put a server.
+        host_id = self._raw_selected_host_id()
+        return "" if host_id == ADD_HOST_SENTINEL else host_id
+
     def _on_host_changed(self, *_args) -> None:
+        if self._suppress_host_change:
+            return
+
+        if self._raw_selected_host_id() == ADD_HOST_SENTINEL:
+            # Put the picker back first, so backing out of the detour leaves no trace.
+            self._refresh_host_row(select_id=self._last_host_id)
+            self._open_add_host_page()
+            return
+
+        self._last_host_id = self._selected_host_id()
+        self._apply_host_rules()
+
+    def _apply_host_rules(self) -> None:
         # Bedrock servers are not installed remotely yet, so a remote host offers Java only.
         remote = bool(self._selected_host_id())
         if remote and self._edition_row.get_selected() != 0:
@@ -468,6 +521,115 @@ class CreateServerDialog(Adw.Dialog):
             _("Remote hosts run Java Edition servers")
             if remote
             else _("Java Edition supports mods; Bedrock is the console and mobile edition")
+        )
+
+    # ------------------------------------------------------------ adding a computer
+    def _build_add_host_page(self) -> Gtk.Widget:
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.set_margin_top(24)
+        box.set_margin_bottom(24)
+        box.set_margin_start(24)
+        box.set_margin_end(24)
+
+        heading = Gtk.Label(label=_("Add another computer"))
+        heading.add_css_class("title-4")
+        heading.set_xalign(0.0)
+        box.append(heading)
+
+        blurb = Gtk.Label(
+            label=_(
+                "The server is installed and run on that machine over SSH. It keeps "
+                "running there after you close this app, and Java is installed for you."
+            )
+        )
+        blurb.add_css_class("dim-label")
+        blurb.set_wrap(True)
+        blurb.set_xalign(0.0)
+        box.append(blurb)
+
+        self._host_form = build_host_form()
+        connect_host_form_changed(self._host_form, self._validate)
+        box.append(self._host_form.box)
+
+        self._host_status = Gtk.Label()
+        self._host_status.add_css_class("caption")
+        self._host_status.set_wrap(True)
+        self._host_status.set_xalign(0.0)
+        self._host_status.set_visible(False)
+        box.append(self._host_status)
+
+        scrolled.set_child(box)
+        return scrolled
+
+    def _open_add_host_page(self) -> None:
+        self._set_host_status("", error=False)
+        self._stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT)
+        self._stack.set_visible_child_name("addhost")
+        self._validate()
+
+    def _set_host_status(self, text: str, error: bool) -> None:
+        self._host_status.set_label(text)
+        if error:
+            self._host_status.add_css_class("error")
+        else:
+            self._host_status.remove_css_class("error")
+        self._host_status.set_visible(bool(text))
+
+    def _cancel_host_probe(self) -> None:
+        """Stop caring about an attempt in flight; its thread finishes and is ignored."""
+        self._host_probe_gen += 1
+        self._host_probe_running = False
+        set_host_form_editable(self._host_form, True)
+        self._set_host_status("", error=False)
+
+    def _start_host_probe(self) -> None:
+        from niksnaks_hosting.shared.remote.hosts_manager import get_hosts_manager
+
+        draft = host_draft(self._host_form)
+        if draft is None:
+            self._set_host_status(host_form_error(self._host_form), error=True)
+            return
+
+        self._host_probe_gen += 1
+        generation = self._host_probe_gen
+        self._host_probe_running = True
+        set_host_form_editable(self._host_form, False)
+        self._set_host_status(_("Connecting…"), error=False)
+        self._validate()
+
+        def still_wanted() -> bool:
+            return generation == self._host_probe_gen
+
+        def on_step(text: str) -> None:
+            self._set_host_status(text, error=False)
+
+        def on_done(host, detail: str) -> None:
+            self._host_probe_running = False
+            set_host_form_editable(self._host_form, True)
+
+            if host is None:
+                self._set_host_status(detail, error=True)
+                self._validate()
+                return
+
+            # Straight back to where the wizard left off, with the new machine chosen.
+            self._set_host_status("", error=False)
+            self._last_host_id = host.id
+            self._refresh_host_row(select_id=host.id)
+            self._apply_host_rules()
+            self._stack.set_transition_type(Gtk.StackTransitionType.SLIDE_RIGHT)
+            self._stack.set_visible_child_name("runtime")
+            self._validate()
+
+        add_host_and_verify(
+            get_hosts_manager(),
+            draft,
+            on_step=on_step,
+            on_done=on_done,
+            still_wanted=still_wanted,
         )
 
     def _selected_loader(self) -> str:
@@ -760,6 +922,12 @@ class CreateServerDialog(Adw.Dialog):
 
     def _on_cancel_clicked(self, button):
         page = self._stack.get_visible_child_name()
+        if page == "addhost":
+            self._cancel_host_probe()
+            self._stack.set_transition_type(Gtk.StackTransitionType.SLIDE_RIGHT)
+            self._stack.set_visible_child_name("runtime")
+            self._validate()
+            return
         if page == "runtime":
             self._stack.set_transition_type(Gtk.StackTransitionType.SLIDE_RIGHT)
             self._stack.set_visible_child_name("details")
@@ -979,6 +1147,18 @@ class CreateServerDialog(Adw.Dialog):
             self._create_btn.set_sensitive(ready and self._port_conflict() is None)
             return
 
+        if page == "addhost":
+            # Back stays live during a probe -- a wrong address otherwise strands the
+            # user for the full 20s connect timeout. The generation counter is what
+            # makes leaving safe; the disabled Connect is what stops a second attempt.
+            self._cancel_btn.set_label(_("Back"))
+            self._cancel_btn.set_sensitive(True)
+            self._create_btn.set_label(_("Connect"))
+            self._create_btn.set_sensitive(
+                not self._host_probe_running and host_draft(self._host_form) is not None
+            )
+            return
+
         self._cancel_btn.set_label(_("Cancel"))
         self._cancel_btn.set_sensitive(False)
         self._create_btn.set_label(_("Create"))
@@ -990,6 +1170,10 @@ class CreateServerDialog(Adw.Dialog):
             self._stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT)
             self._stack.set_visible_child_name("runtime")
             self._validate()
+            return
+
+        if page == "addhost":
+            self._start_host_probe()
             return
 
         if page == "runtime":

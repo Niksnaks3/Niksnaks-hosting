@@ -160,6 +160,14 @@ class NiksnaksHostingApplication(Adw.Application):
             purge_pending_deletions(
                 [s.server_dir for s in self._server_manager.servers], max_attempts=1
             )
+
+        # Only now: stopping a remote server talks to it over SSH, so the connections
+        # have to outlive stop_all(). Going through sys.modules keeps quitting from
+        # being the thing that first imports the remote stack.
+        hosts_module = sys.modules.get("niksnaks_hosting.shared.remote.hosts_manager")
+        if hosts_module is not None:
+            hosts_module.close_shared_hosts()
+
         set_main_thread_dispatcher(None)
         Adw.Application.do_shutdown(self)
 

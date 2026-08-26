@@ -148,7 +148,14 @@ class HostsManager(EventEmitter):
             host.credentials.password = password
 
     def trust_current_key(self, host_id: str) -> None:
+        """Write down the key this host answered with, so a later change is noticed.
+
+        _save() reads the live key off each connection, so there is nothing to pass in
+        here -- but a host that has already been removed must not resurrect the file.
+        """
         with self._lock:
+            if str(host_id) not in self._hosts:
+                return
             self._save()
 
     def close_all(self) -> None:
@@ -168,6 +175,17 @@ class HostsManager(EventEmitter):
 
 _shared: HostsManager | None = None
 _shared_lock = threading.Lock()
+
+
+def close_shared_hosts() -> None:
+    """Close every SSH connection, if any host was ever resolved this run.
+
+    Quitting should not be the thing that first builds a HostsManager, so this stays
+    quiet when nothing ever asked for one.
+    """
+    with _shared_lock:
+        if _shared is not None:
+            _shared.close_all()
 
 
 def get_hosts_manager() -> HostsManager:
