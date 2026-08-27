@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 import fnmatch
 import posixpath
+import re
 import stat as stat_module
 import threading
 from collections.abc import Iterator
@@ -14,6 +15,18 @@ from niksnaks_hosting.shared.remote.ssh_client import SshConnection, SshError
 # Reading a whole modpack a few kilobytes at a time spends the entire transfer waiting
 # on round trips. SFTP tops out well above this, but it is a sane per-read chunk.
 TRANSFER_CHUNK = 262144
+
+# OpenSSH's SFTP server on Windows serves drives as /C:/Users/nik. Walking up from one
+# of those to create missing parents reaches /C: and then /, neither of which is a
+# directory anyone may create -- and a server that answers "permission denied" there
+# would fail the whole mkdir for a folder three levels down that was perfectly legal.
+_DRIVE_ROOT = re.compile(r"^/[A-Za-z]:/?$")
+
+
+def is_root(path: str) -> bool:
+    """Whether this is a place the filesystem starts, rather than a folder in it."""
+    text = str(path)
+    return text in ("", "/") or bool(_DRIVE_ROOT.match(text))
 
 
 class SftpFs:
@@ -106,7 +119,7 @@ class SftpFs:
 
         if parents:
             parent = posixpath.dirname(path.rstrip("/"))
-            if parent and parent != path and self.stat(parent) is None:
+            if parent and parent != path and not is_root(parent) and self.stat(parent) is None:
                 self.mkdir(parent, mode=mode, parents=True, exist_ok=True)
 
         try:

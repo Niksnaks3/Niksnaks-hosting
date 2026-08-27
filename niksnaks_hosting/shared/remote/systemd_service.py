@@ -1,41 +1,37 @@
 from __future__ import annotations
 
-import re
 import shlex
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from niksnaks_hosting.shared.remote.remote_service import (
+    CONSOLE_LOG,
+    STOP_GRACE_SECONDS,
+    UNIT_PREFIX,
+    UnitState,
+    as_int,
+    unit_name,
+)
 from niksnaks_hosting.shared.remote.ssh_client import CommandResult
 
 if TYPE_CHECKING:
     from niksnaks_hosting.shared.remote.host import SshHost
 
-# One unit per server, named so a person reading `systemctl --user list-units` can tell
-# what it is and the app can find its own units again.
-UNIT_PREFIX = "niksnaks-"
+# Re-exported so nothing outside had to learn that these moved.
+__all__ = [
+    "CONSOLE_LOG",
+    "STDIN_FIFO",
+    "STOP_GRACE_SECONDS",
+    "UNIT_PREFIX",
+    "SystemdService",
+    "UnitState",
+    "ensure_user_manager",
+    "unit_name",
+]
 
 # Minecraft answers "stop" on stdin, and systemd cannot type it. The unit keeps a FIFO
 # open as the process's stdin so the app can push console commands into it, and stopping
 # writes "stop" there rather than sending a signal, so the world is saved on the way out.
 STDIN_FIFO = "console.in"
-CONSOLE_LOG = "console.log"
-
-STOP_GRACE_SECONDS = 180
-
-
-def unit_name(server_id: str) -> str:
-    """A systemd unit name that is unique per server and legal as a filename."""
-    safe = re.sub(r"[^A-Za-z0-9_-]", "", str(server_id))[:40] or "server"
-    return f"{UNIT_PREFIX}{safe}"
-
-
-@dataclass
-class UnitState:
-    active: bool
-    status: str
-    pid: int = 0
-    memory_bytes: int = 0
-    cpu_seconds: float = 0.0
 
 
 class SystemdService:
@@ -110,7 +106,8 @@ WantedBy=default.target
         self.host.path(self.unit_path).unlink(missing_ok=True)
         self._systemctl("daemon-reload")
 
-    def enable_autostart(self, enabled: bool) -> None:
+    def enable_autostart(self, enabled: bool, description: str = "") -> None:
+        # The unit file already has its description; enabling a unit never rewrites it.
         self._systemctl("enable" if enabled else "disable", f"{self.unit}.service")
 
     # -------------------------------------------------------------------- control
@@ -127,6 +124,14 @@ WantedBy=default.target
 
     def kill(self) -> None:
         self._systemctl("kill", "--signal=SIGKILL", f"{self.unit}.service")
+
+    def kill_pid(self, pid: int) -> None:
+        self.host.run(["kill", "-9", str(int(pid))], timeout=30)
+
+    def take_warnings(self) -> list[str]:
+        # Writing a unit needs nothing this account might lack, so there is never
+        # anything to report here.
+        return []
 
     def send_console(self, line: str) -> None:
         """Type a line into the running server's console."""
@@ -157,9 +162,9 @@ WantedBy=default.target
         return UnitState(
             active=active,
             status=values.get("SubState", values.get("ActiveState", "unknown")),
-            pid=_as_int(values.get("MainPID")),
-            memory_bytes=_as_int(values.get("MemoryCurrent")),
-            cpu_seconds=_as_int(values.get("CPUUsageNSec")) / 1_000_000_000,
+            pid=as_int(values.get("MainPID")),
+            memory_bytes=as_int(values.get("MemoryCurrent")),
+            cpu_seconds=as_int(values.get("CPUUsageNSec")) / 1_000_000_000,
         )
 
     def follow_console(self):
@@ -173,6 +178,38 @@ WantedBy=default.target
     def read_console_tail(self, lines: int = 1000) -> str:
         result = self.host.run(["tail", "-n", str(int(lines)), self.log_path], timeout=30)
         return result.stdout
+
+    def foreign_process_pid(self) -> int:
+        """A JVM already running out of this folder that this unit did not start.
+
+        The far machine may have its own copy of this app, which starts servers as plain
+        child processes systemd knows nothing about. Matching on the working directory
+        rather than the command line catches those too, since the folder is the thing
+        that must not be opened twice.
+        """
+        mine = self.state().pid
+        script = (
+            f"dir=$(readlink -f {shlex.quote(self.server_dir)} 2>/dev/null); "
+            '[ -n "$dir" ] || exit 0; '
+            'for p in /proc/[0-9]*; do '
+            'pid=${p#/proc/}; '
+            '[ -r "$p/cwd" ] || continue; '
+            'case "$(readlink "$p/cwd" 2>/dev/null)" in '
+            '"$dir") ;; *) continue ;; esac; '
+            'case "$(tr "\\0" " " < "$p/cmdline" 2>/dev/null)" in '
+            '*java*|*bedrock_server*) printf "%s\\n" "$pid" ;; '
+            'esac; '
+            "done"
+        )
+        try:
+            result = self.host.run_shell(script, timeout=30)
+        except Exception:
+            return 0
+        for token in result.stdout.split():
+            pid = as_int(token)
+            if pid and pid != mine:
+                return pid
+        return 0
 
 
 def ensure_user_manager(host: SshHost) -> tuple[bool, str]:
@@ -211,12 +248,3 @@ def _escape_specifiers(unit_text: str) -> str:
     body = unit_text.replace("%", "%%")
     # Only values are escaped; there are no specifiers in the section headers or keys.
     return body
-
-
-def _as_int(value: str | None) -> int:
-    try:
-        number = int(str(value or "0"))
-    except ValueError:
-        return 0
-    # systemd reports an unset counter as the largest unsigned 64-bit value.
-    return 0 if number < 0 or number >= 2**63 else number

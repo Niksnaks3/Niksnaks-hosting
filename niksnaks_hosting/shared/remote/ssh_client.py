@@ -153,6 +153,17 @@ class SshConnection:
                 self._connect_locked()
             return self._client
 
+    @property
+    def server_banner(self) -> str:
+        """What the SSH server called itself during the handshake.
+
+        OpenSSH for Windows announces SSH-2.0-OpenSSH_for_Windows_9.5, which names the
+        far machine's platform without spending a single round trip on asking.
+        """
+        client = self._client
+        transport = client.get_transport() if client is not None else None
+        return str(getattr(transport, "remote_version", "") or "")
+
     # ------------------------------------------------------------------ commands
     def run(self, command: str, timeout: float = COMMAND_TIMEOUT) -> CommandResult:
         """Run a shell command and collect what it printed.
@@ -226,6 +237,26 @@ class SshConnection:
             return channel
         except Exception as e:
             raise SshError(f"Could not start a command on {self.credentials.label}: {e}") from e
+
+    def open_tunnel(self, remote_host: str, remote_port: int, timeout: float = 20.0) -> Any:
+        """A socket-like channel to a port on the far machine, opened from there.
+
+        This is what lets the app speak RCON to a Windows server without that port ever
+        being reachable from anywhere else: the connection originates on the host, so
+        rcon can stay bound to loopback and the usual objection to enabling it goes away.
+        """
+        client = self._ensure()
+        try:
+            transport = client.get_transport()
+            channel = transport.open_channel(
+                "direct-tcpip", (remote_host, int(remote_port)), ("127.0.0.1", 0), timeout=timeout
+            )
+        except Exception as e:
+            raise SshError(
+                f"Could not reach port {remote_port} on {self.credentials.label}: {e}"
+            ) from e
+        channel.settimeout(timeout)
+        return channel
 
     # ---------------------------------------------------------------------- sftp
     def sftp(self) -> Any:

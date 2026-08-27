@@ -512,16 +512,82 @@ class CreateServerDialog(Adw.Dialog):
         self._apply_host_rules()
 
     def _apply_host_rules(self) -> None:
-        # Bedrock servers are not installed remotely yet, so a remote host offers Java only.
-        remote = bool(self._selected_host_id())
-        if remote and self._edition_row.get_selected() != 0:
+        host_id = self._selected_host_id()
+        allowed, why_not = self._bedrock_allowed(host_id)
+        if not allowed and self._edition_row.get_selected() != 0:
             self._edition_row.set_selected(0)
-        self._edition_row.set_sensitive(not remote)
+        self._edition_row.set_sensitive(allowed)
         self._edition_row.set_subtitle(
-            _("Remote hosts run Java Edition servers")
-            if remote
-            else _("Java Edition supports mods; Bedrock is the console and mobile edition")
+            why_not or _("Java Edition supports mods; Bedrock is the console and mobile edition")
         )
+
+    def _bedrock_allowed(self, host_id: str) -> tuple[bool, str]:
+        """Whether this host can run Bedrock, answered without connecting to ask.
+
+        Mojang publishes Bedrock for 64-bit Intel and AMD only, on Windows and Linux. The
+        platform and architecture were written down the first time the host was reached,
+        so a host that has never been connected to gets the benefit of the doubt and is
+        told at install time instead.
+        """
+        if not host_id:
+            return True, ""
+
+        from niksnaks_hosting.shared.remote.host_ops import make_ops
+        from niksnaks_hosting.shared.remote.hosts_manager import get_hosts_manager
+
+        hosts = get_hosts_manager()
+        host = hosts.get(host_id)
+        platform = hosts.platform_of(host_id)
+        arch = getattr(host, "arch", "")
+        if host is None or not platform or not arch:
+            return True, ""
+        if make_ops(platform).supports_bedrock(arch):
+            return True, ""
+        return False, _("{} is a {} machine, and Bedrock is only published for 64-bit Intel and AMD").format(
+            host.name, arch
+        )
+
+    def _remote_platform(self) -> str:
+        """The platform of the host a new server would go on. Empty for this computer.
+
+        A remote host whose platform has never been detected is NOT the same thing as
+        no host at all -- callers such as the Bedrock build picker treat "" as "use
+        this machine's own OS", so returning it here for an undetected remote host
+        would hand a Linux desktop's Windows target the Linux zip. Connecting is the
+        only way to find out for sure; _remote_platform_blocking below does that off
+        the main thread for callers that can afford to wait on it.
+        """
+        host_id = self._selected_host_id()
+        if not host_id:
+            return ""
+        from niksnaks_hosting.shared.remote.hosts_manager import get_hosts_manager
+
+        return get_hosts_manager().platform_of(host_id)
+
+    @staticmethod
+    def _remote_platform_blocking(host_id: str) -> str:
+        """Like _remote_platform, but connects to find out if it has to.
+
+        Takes the host id rather than reading the picker, because this only ever runs
+        on a worker thread -- a host that is slow to answer or unreachable must not
+        freeze the wizard -- and the picker is a widget, which is not safe to touch
+        from one. The caller reads it on the main thread and passes it in.
+        """
+        if not host_id:
+            return ""
+        from niksnaks_hosting.shared.remote.hosts_manager import get_hosts_manager
+
+        hosts = get_hosts_manager()
+        platform = hosts.platform_of(host_id)
+        if platform:
+            return platform
+        host = hosts.get(host_id)
+        if host is None:
+            return ""
+        try:
+            return host.ops.platform
+        except Exception:
+            return ""
 
     # ------------------------------------------------------------ adding a computer
     def _build_add_host_page(self) -> Gtk.Widget:
@@ -541,8 +607,9 @@ class CreateServerDialog(Adw.Dialog):
 
         blurb = Gtk.Label(
             label=_(
-                "The server is installed and run on that machine over SSH. It keeps "
-                "running there after you close this app, and Java is installed for you."
+                "Windows or Linux. The server is installed and run on that machine over "
+                "SSH, keeps running there after you close this app, and Java is "
+                "installed for you."
             )
         )
         blurb.add_css_class("dim-label")
@@ -620,9 +687,15 @@ class CreateServerDialog(Adw.Dialog):
             self._last_host_id = host.id
             self._refresh_host_row(select_id=host.id)
             self._apply_host_rules()
+            # The host works either way; a detail here means key login could not be set
+            # up, which only matters once the app is closed. Said, not blocked on.
+            self._host_row.set_subtitle(
+                detail or _("This computer, or another one you connect to over SSH")
+            )
             self._stack.set_transition_type(Gtk.StackTransitionType.SLIDE_RIGHT)
             self._stack.set_visible_child_name("runtime")
             self._validate()
+            self._offer_adoption(host)
 
         add_host_and_verify(
             get_hosts_manager(),
@@ -631,6 +704,55 @@ class CreateServerDialog(Adw.Dialog):
             on_done=on_done,
             still_wanted=still_wanted,
         )
+
+    def _offer_adoption(self, host) -> None:
+        """If this app is already installed over there, say so before making a new server.
+
+        This is the moment the offer matches what the user is thinking: they have just
+        pointed the app at a machine, and if that machine is already running servers,
+        creating another one is probably not what they came for.
+        """
+
+        def worker() -> None:
+            from niksnaks_hosting.shared.remote.remote_adopt import discover_remote_servers
+
+            try:
+                found, _where = discover_remote_servers(self._server_manager, host)
+            except Exception:
+                return
+            waiting = [candidate for candidate in found if candidate.importable]
+            if not waiting:
+                return
+
+            def ask() -> bool:
+                dialog = Adw.AlertDialog()
+                dialog.set_heading(_("{} is already running servers").format(host.name))
+                dialog.set_body(
+                    _(
+                        "Niksnaks-Hosting is installed on {} and manages {} server(s) there. "
+                        "You can control those from here instead of creating a new one."
+                    ).format(host.name, len(waiting))
+                )
+                dialog.add_response("skip", _("Not now"))
+                dialog.add_response("adopt", _("Show them"))
+                dialog.set_response_appearance("adopt", Adw.ResponseAppearance.SUGGESTED)
+                dialog.set_default_response("adopt")
+                dialog.set_close_response("skip")
+
+                def on_response(_d, response):
+                    if response != "adopt":
+                        return
+                    from niksnaks_hosting.gtk_ui.dialogs.adopt_servers import show_adopt_dialog
+
+                    show_adopt_dialog(self, self._server_manager, host)
+
+                dialog.connect("response", on_response)
+                dialog.present(self)
+                return False
+
+            GLib.idle_add(ask)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _selected_loader(self) -> str:
         idx = self._loader_row.get_selected()
@@ -807,7 +929,18 @@ class CreateServerDialog(Adw.Dialog):
 
                 GLib.idle_add(apply)
 
-            self._server_manager.bedrock_manager.fetch_versions_async(on_bedrock_versions)
+            # A server bound for a Linux host needs the Linux zip, whichever kind of
+            # machine this app happens to be running on. A host that has never been
+            # connected to has to be connected to now to find that out -- off this
+            # thread, since it may mean a live round trip to the far machine. The
+            # picker is read here, on the main thread, and never inside the worker.
+            host_id = self._selected_host_id()
+
+            def worker() -> None:
+                platform = self._remote_platform_blocking(host_id)
+                on_bedrock_versions(self._server_manager.bedrock_manager.fetch_versions(platform))
+
+            threading.Thread(target=worker, daemon=True).start()
             return
 
         def on_versions(game_vers):
@@ -1330,6 +1463,10 @@ class CreateServerDialog(Adw.Dialog):
         self, name, option, ram_mb, seed, difficulty, gamemode, icon_source_path, world_import_source_path, port
     ):
 
+        if self._selected_host_id():
+            self._install_remote_bedrock_thread(name, option, ram_mb, seed, difficulty, gamemode, port)
+            return
+
         try:
             self._update_progress(0.05, _("Creating server..."), _("Bedrock {}").format(option.version))
             server_info = self._server_manager.add_server(
@@ -1389,6 +1526,92 @@ class CreateServerDialog(Adw.Dialog):
 
         except Exception as e:
             self._show_error(_("Unexpected error: {}").format(e))
+
+    def _install_remote_bedrock_thread(self, name, option, ram_mb, seed, difficulty, gamemode, port):
+        """A Bedrock server on another machine: one zip, no Java, no loader.
+
+        The icon and world-import steps the local path offers are left out here for the
+        same reason the remote Java path leaves them out -- both read files from this
+        computer, and putting them on the host is a separate job from creating it.
+        """
+        from niksnaks_hosting.shared.remote.hosts_manager import get_hosts_manager
+        from niksnaks_hosting.shared.remote.remote_install import install_remote_bedrock
+
+        host_id = self._selected_host_id()
+        host = get_hosts_manager().get(host_id)
+        if host is None or host.is_local:
+            self._show_error(_("That host is no longer set up in this app."))
+            return
+
+        self._update_progress(0.04, _("Checking {}…").format(host.name), "")
+        try:
+            ready, detail = host.check_ready()
+        except Exception as e:
+            ready, detail = False, str(e)
+        if not ready:
+            self._show_error(detail)
+            return
+
+        if not host.ops.supports_bedrock(host.arch or ""):
+            self._show_error(
+                _("{} is a {} machine, and Bedrock is only published for 64-bit Intel and AMD.").format(
+                    host.name, host.arch or _("unrecognised")
+                )
+            )
+            return
+
+        keeps_running, why_not = host.ops.ensure_service_manager(host)
+        if not keeps_running:
+            self._show_error(why_not)
+            return
+
+        self._update_progress(0.10, _("Creating server on {}…").format(host.name), "")
+        try:
+            server_info = self._server_manager.add_server(
+                name=name,
+                mc_version=option.version,
+                ram_mb=ram_mb,
+                edition=EDITION_BEDROCK,
+                host_id=host_id,
+            )
+        except Exception as e:
+            self._show_error(_("Could not create the server on {}: {}").format(host.name, e))
+            return
+
+        try:
+            install_remote_bedrock(
+                host=host,
+                server_dir=str(server_info.server_dir),
+                option=option,
+                progress=lambda f, text: self._update_progress(0.12 + f * 0.76, text, ""),
+            )
+        except Exception as e:
+            # add_server() above already registered this server; a failed install must
+            # not leave that record behind pointing at a folder with nothing usable in
+            # it, or the sidebar shows a server that can never actually start.
+            self._server_manager.delete_server(server_info.id)
+            self._show_error(str(e))
+            return
+
+        self._update_progress(0.90, _("Applying server settings…"), "")
+        try:
+            config = ConfigManager(server_info.server_dir)
+            config.load()
+            for key, value in BEDROCK_DEFAULT_SERVER_PROPERTIES.items():
+                config.set_value(key, value)
+            config.set_value("server-name", name)
+            config.set_value("difficulty", difficulty)
+            config.set_value("gamemode", gamemode)
+            config.set_value("level-seed", seed)
+            # Bedrock listens on the chosen port for IPv4 and the next one up for IPv6.
+            config.set_value("server-port", port)
+            config.set_value("server-portv6", port + 1)
+            config.save()
+        except Exception as e:
+            self._show_error(_("The server was installed but its settings could not be written: {}").format(e))
+            return
+
+        self._show_success(server_info.id)
 
     def _install_thread(
         self,
@@ -1636,11 +1859,11 @@ class CreateServerDialog(Adw.Dialog):
             self._show_error(detail)
             return
 
-        from niksnaks_hosting.shared.remote.systemd_service import ensure_user_manager
-
-        linger_ok, linger_detail = ensure_user_manager(host)
-        if not linger_ok:
-            self._show_error(linger_detail)
+        # Whatever it takes for a server to outlive this app on that machine: lingering
+        # for a systemd user session, a working Task Scheduler on Windows.
+        keeps_running, why_not = host.ops.ensure_service_manager(host)
+        if not keeps_running:
+            self._show_error(why_not)
             return
 
         self._update_progress(0.10, _("Creating server on {}…").format(host.name), "")
@@ -1669,6 +1892,10 @@ class CreateServerDialog(Adw.Dialog):
                 progress=lambda f, text: self._update_progress(0.12 + f * 0.74, text, ""),
             )
         except Exception as e:
+            # add_server() above already registered this server; a failed install must
+            # not leave that record behind pointing at a folder with nothing usable in
+            # it, or the sidebar shows a server that can never actually start.
+            self._server_manager.delete_server(server_info.id)
             self._show_error(str(e))
             return
 

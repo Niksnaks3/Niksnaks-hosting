@@ -35,12 +35,17 @@ LOADER_JAR_GLOBS = {
     LOADER_NEOFORGE: "neoforge-*.jar",
 }
 
-def loader_args_file(server_dir: Path, loader_type: str) -> Path | None:
+def loader_args_file(
+    server_dir: Path, loader_type: str, prefer_windows: bool | None = None
+) -> Path | None:
     # Which args file to prefer follows the machine the server runs on, not the one
-    # running this app: a Windows desktop managing a Linux host must still pick
-    # unix_args.txt, or the server is handed classpaths with the wrong separators.
-    remote = is_remote(server_dir)
-    preferred = "win_args.txt" if (sys.platform == "win32" and not remote) else "unix_args.txt"
+    # running this app: a Windows desktop managing a Linux host must pick unix_args.txt,
+    # and a Linux desktop managing a Windows host must pick win_args.txt, or the server
+    # is handed classpaths with the wrong separators. Only the caller knows which the
+    # far machine is, so a remote one has to say.
+    if prefer_windows is None:
+        prefer_windows = sys.platform == "win32" and not is_remote(server_dir)
+    preferred = "win_args.txt" if prefer_windows else "unix_args.txt"
     candidates: list[Path] = []
 
     for library_path in LOADER_LIBRARY_PATHS.get(normalize_loader(loader_type), []):
@@ -82,12 +87,14 @@ def is_loader_installed(server_dir: Path | str, loader_type: str) -> bool:
         return loader_args_file(root, loader) is not None or loader_launch_jar(root, loader) is not None
     return (root / FABRIC_LAUNCH_JAR).is_file()
 
-def resolve_launch_args(server_dir: Path | str, loader_type: str) -> tuple[list[str], str]:
+def resolve_launch_args(
+    server_dir: Path | str, loader_type: str, prefer_windows: bool | None = None
+) -> tuple[list[str], str]:
     root = _as_path(server_dir)
     loader = normalize_loader(loader_type)
 
     if uses_installer(loader):
-        args_file = loader_args_file(root, loader)
+        args_file = loader_args_file(root, loader, prefer_windows)
         if args_file:
             relative = args_file.relative_to(root).as_posix()
             return [f"@{relative}", "nogui"], ""

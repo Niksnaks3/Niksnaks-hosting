@@ -288,7 +288,7 @@ class NiksnaksHostingApplication(Adw.Application):
         from niksnaks_hosting.shared.remote.hosts_manager import get_hosts_manager
 
         if self._window:
-            show_hosts_dialog(self._window, get_hosts_manager())
+            show_hosts_dialog(self._window, get_hosts_manager(), self._server_manager)
 
     def _on_shortcuts(self, action, param):
         if not self._window:

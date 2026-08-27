@@ -16,6 +16,7 @@ from niksnaks_hosting.shared.utils.constants import (
     BEDROCK_SERVER_BINARY,
     CACHE_DIR,
     get_bedrock_download_types,
+    get_bedrock_download_types_for,
 )
 
 # www.minecraft.net rejects requests without a browser user agent.
@@ -71,13 +72,22 @@ class BedrockManager:
         self._links = links
         return dict(links)
 
-    def fetch_versions(self) -> list[BedrockVersionOption]:
+    def fetch_versions(self, platform: str = "") -> list[BedrockVersionOption]:
+        """The builds on offer, for this machine or for a named platform.
 
+        Mojang publishes every platform's link in one document, so asking on another
+        machine's behalf costs nothing extra -- and a server that will run on a Linux
+        host must not be handed the Windows zip because this app happens to be on
+        Windows.
+        """
         links = self.fetch_download_links()
         if not links:
             return []
 
-        release_type, preview_type = get_bedrock_download_types()
+        if platform:
+            release_type, preview_type = get_bedrock_download_types_for(platform)
+        else:
+            release_type, preview_type = get_bedrock_download_types()
         options: list[BedrockVersionOption] = []
         for download_type, preview in ((release_type, False), (preview_type, True)):
             url = links.get(download_type)
@@ -90,9 +100,11 @@ class BedrockManager:
 
         return options
 
-    def fetch_versions_async(self, callback: Callable[[list[BedrockVersionOption]], None]):
+    def fetch_versions_async(
+        self, callback: Callable[[list[BedrockVersionOption]], None], platform: str = ""
+    ):
         def _fetch():
-            callback(self.fetch_versions())
+            callback(self.fetch_versions(platform))
 
         thread = threading.Thread(target=_fetch, daemon=True)
         thread.start()

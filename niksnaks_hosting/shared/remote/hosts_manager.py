@@ -49,7 +49,17 @@ class HostsManager(EventEmitter):
                 key_path=str(raw.get("key_path", "")),
                 known_host_key=str(raw.get("known_host_key", "")),
             )
-            host = SshHost(str(raw["id"]), str(raw.get("name", "")), credentials)
+            host = SshHost(
+                str(raw["id"]),
+                str(raw.get("name", "")),
+                credentials,
+                # Remembered so the wizard can tell a Windows host from a Linux one
+                # before anything has connected. An older file simply has neither, and
+                # the host works it out again on first use.
+                platform=str(raw.get("platform", "")),
+                arch=str(raw.get("arch", "")),
+            )
+            host.on_platform_detected = self._remember_platform
             self._hosts[host.id] = host
 
     def _save(self) -> None:
@@ -62,6 +72,8 @@ class HostsManager(EventEmitter):
                     "port": host.credentials.port,
                     "username": host.credentials.username,
                     "key_path": host.credentials.key_path,
+                    "platform": host.platform,
+                    "arch": host.arch,
                     # Pinned so a swapped-out server is noticed rather than trusted.
                     "known_host_key": host.connection.trusted_key or host.credentials.known_host_key,
                 }
@@ -118,6 +130,7 @@ class HostsManager(EventEmitter):
             key_passphrase=key_passphrase,
         )
         host = SshHost(uuid.uuid4().hex[:12], name.strip() or credentials.label, credentials)
+        host.on_platform_detected = self._remember_platform
         with self._lock:
             self._hosts[host.id] = host
             self._save()
@@ -146,6 +159,39 @@ class HostsManager(EventEmitter):
         host = self._hosts.get(str(host_id))
         if host:
             host.credentials.password = password
+
+    def set_key_path(self, host_id: str, key_path: str) -> None:
+        """Remember that this host logs in with a key now, so no password is wanted again."""
+        with self._lock:
+            host = self._hosts.get(str(host_id))
+            if not host:
+                return
+            host.credentials.key_path = key_path
+            self._save()
+        self.emit_on_main_thread("hosts-changed")
+
+    def needs_password(self, host_id: str) -> bool:
+        """Whether this host has nothing to log in with until someone types a password."""
+        host = self._hosts.get(str(host_id))
+        if not host:
+            return False
+        return not host.credentials.key_path and not host.credentials.password
+
+    def _remember_platform(self, host: SshHost) -> None:
+        """Write down what a host turned out to be, so it is never asked twice."""
+        with self._lock:
+            if host.id not in self._hosts:
+                return
+            self._save()
+
+    def platform_of(self, host_id: str | None) -> str:
+        """What kind of machine a host is, without connecting to ask.
+
+        Empty until the host has been reached once. Callers that need an answer before
+        then have to treat "unknown" as its own case rather than guessing.
+        """
+        host = self._hosts.get(str(host_id or ""))
+        return host.platform if host else ""
 
     def trust_current_key(self, host_id: str) -> None:
         """Write down the key this host answered with, so a later change is noticed.

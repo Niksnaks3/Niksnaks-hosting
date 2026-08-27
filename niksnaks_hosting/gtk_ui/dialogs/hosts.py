@@ -8,6 +8,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk
 
+from niksnaks_hosting.gtk_ui.dialogs.host_password import ask_host_password
 from niksnaks_hosting.gtk_ui.host_form import (
     add_host_and_verify,
     build_host_form,
@@ -18,7 +19,7 @@ from niksnaks_hosting.shared.remote.hosts_manager import HostsManager
 from niksnaks_hosting.shared.remote.ssh_client import SshError
 
 
-def show_hosts_dialog(parent: Gtk.Window, hosts: HostsManager) -> None:
+def show_hosts_dialog(parent: Gtk.Window, hosts: HostsManager, manager=None) -> None:
     dialog = Adw.PreferencesDialog()
     dialog.set_title(_("Hosts"))
 
@@ -26,7 +27,7 @@ def show_hosts_dialog(parent: Gtk.Window, hosts: HostsManager) -> None:
     group = Adw.PreferencesGroup(
         title=_("Remote hosts"),
         description=_(
-            "Servers can run on another machine over SSH. It needs systemd, Java is "
+            "Servers can run on another machine over SSH, Windows or Linux. Java is "
             "installed for you, and servers keep running there after you close this app."
         ),
     )
@@ -42,10 +43,41 @@ def show_hosts_dialog(parent: Gtk.Window, hosts: HostsManager) -> None:
         for host in hosts.ssh_hosts():
             row = Adw.ActionRow(title=host.name, subtitle=host.credentials.label)
 
-            status = Gtk.Label(label=_("Connected") if host.is_connected else _("Not connected"))
+            if host.is_connected:
+                state = _("Connected")
+            elif hosts.needs_password(host.id):
+                state = _("Needs password")
+            else:
+                state = _("Not connected")
+            status = Gtk.Label(label=state)
             status.add_css_class("caption")
             status.add_css_class("dim-label")
             row.add_suffix(status)
+
+            if hosts.needs_password(host.id):
+                # No key was ever installed, so there is nothing to reconnect with until
+                # someone types the password again.
+                unlock = Gtk.Button(label=_("Password…"), valign=Gtk.Align.CENTER)
+                unlock.connect(
+                    "clicked",
+                    lambda _b, h=host: ask_host_password(
+                        dialog, hosts, h.id, lambda _ok, _detail: rebuild()
+                    ),
+                )
+                row.add_suffix(unlock)
+
+            if manager is not None:
+                # The whole point of the far machine having this app installed too: its
+                # servers can be taken on from here rather than recreated.
+                adopt = Gtk.Button(label=_("Its servers…"), valign=Gtk.Align.CENTER)
+                adopt.set_tooltip_text(
+                    _("Control servers a Niksnaks-Hosting install on this machine already manages")
+                )
+                adopt.connect(
+                    "clicked",
+                    lambda _b, h=host: _show_adopt(dialog, manager, h),
+                )
+                row.add_suffix(adopt)
 
             test = Gtk.Button(label=_("Test"), valign=Gtk.Align.CENTER)
             test.connect("clicked", lambda _b, h=host, s=status: _test_host(dialog, h, s))
@@ -81,6 +113,12 @@ def show_hosts_dialog(parent: Gtk.Window, hosts: HostsManager) -> None:
     dialog.present(parent)
 
 
+def _show_adopt(parent, manager, host) -> None:
+    from niksnaks_hosting.gtk_ui.dialogs.adopt_servers import show_adopt_dialog
+
+    show_adopt_dialog(parent, manager, host)
+
+
 def _test_host(parent, host, status_label: Gtk.Label) -> None:
     status_label.set_label(_("Checking…"))
 
@@ -108,8 +146,11 @@ def _confirm_remove(parent, hosts: HostsManager, host, on_done) -> None:
     dialog.set_heading(_("Remove {}?").format(host.name))
     dialog.set_body(
         _(
-            "This app stops managing the host. Servers already on it are left exactly as "
-            "they are, still running, and nothing on the machine is deleted."
+            "This app stops managing the host. If it has a login key on the machine, it "
+            "tries to take that back off too, though a host that cannot be reached right "
+            "now will keep its key line until it is. Servers already on it are left "
+            "exactly as they are, still running, and nothing else on the machine is "
+            "deleted."
         )
     )
     dialog.add_response("cancel", _("Cancel"))
@@ -120,11 +161,50 @@ def _confirm_remove(parent, hosts: HostsManager, host, on_done) -> None:
 
     def on_response(_d, response):
         if response == "remove":
-            hosts.remove(host.id)
-            on_done()
+            _remove_host(parent, hosts, host, on_done)
 
     dialog.connect("response", on_response)
     dialog.present(parent)
+
+
+def _remove_host(parent, hosts: HostsManager, host, on_done) -> None:
+    """Take the app's key off the machine before forgetting how to reach it."""
+
+    def worker() -> None:
+        from niksnaks_hosting.shared.remote.key_auth import KEY_PATH, revoke_key
+
+        # Only worth a round trip if this app ever put its key there; otherwise an
+        # unreachable host would hold the removal open for the connect timeout.
+        had_key = host.credentials.key_path == str(KEY_PATH)
+        revoked = not had_key
+        if had_key:
+            try:
+                revoked = revoke_key(host)
+            except Exception:
+                revoked = False
+
+        def finish() -> bool:
+            hosts.remove(host.id)
+            if had_key and not revoked:
+                # The dialog promised the key would come back off; say so when it did
+                # not, rather than quietly leaving a live credential on a machine this
+                # app no longer manages.
+                _alert(
+                    parent,
+                    _("Could not remove the login key"),
+                    _(
+                        "{} could not be reached, so its login key for this app is "
+                        "still on the machine. It is harmless on its own, but if you "
+                        "want it gone, remove it by hand or add the host again later "
+                        "just to take it back off."
+                    ).format(host.name),
+                )
+            on_done()
+            return False
+
+        GLib.idle_add(finish)
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 def _show_add_host(parent, hosts: HostsManager, on_done) -> None:
@@ -150,9 +230,12 @@ def _show_add_host(parent, hosts: HostsManager, on_done) -> None:
             return
 
         def finished(host, detail: str) -> None:
+            label = draft.name or f"{draft.username}@{draft.hostname}"
             if host is None:
-                label = draft.name or f"{draft.username}@{draft.hostname}"
                 _alert(parent, _("Could not use {}").format(label), detail)
+            elif detail:
+                # It works, so the host is kept -- but say what will not survive a restart.
+                _alert(parent, _("Added {}").format(label), detail)
             on_done()
 
         add_host_and_verify(hosts, draft, on_step=lambda _text: None, on_done=finished)

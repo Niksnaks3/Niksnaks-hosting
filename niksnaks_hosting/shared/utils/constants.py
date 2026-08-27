@@ -167,6 +167,19 @@ BEDROCK_WORLDS_DIR = "worlds"
 def get_bedrock_download_types() -> tuple[str, str]:
     return BEDROCK_DOWNLOAD_TYPES.get(sys.platform, BEDROCK_DOWNLOAD_TYPES["linux"])
 
+def get_bedrock_download_types_for(platform: str) -> tuple[str, str]:
+    """The download keys for a named platform, for machines other than this one.
+
+    The same reason get_adoptium_jre_url_for exists: a Windows desktop managing a Linux
+    box needs the Linux build, and the build this app happens to be running on is no
+    guide at all.
+    """
+    key = "win32" if platform == "windows" else "linux"
+    return BEDROCK_DOWNLOAD_TYPES[key]
+
+def get_bedrock_binary_for(platform: str) -> str:
+    return "bedrock_server.exe" if platform == "windows" else "bedrock_server"
+
 ADOPTIUM_API_BASE = "https://api.adoptium.net/v3/binary/latest"
 
 ADOPTIUM_ARCH_MAP = {

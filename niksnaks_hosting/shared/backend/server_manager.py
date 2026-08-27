@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 import uuid
 import zipfile
 from collections.abc import Callable
@@ -173,10 +174,19 @@ class ServerInfo:
         # Empty means this computer, which is what every server made before SSH
         # support existed was, so old entries need no migrating.
         self.host_id: str = str(data.get("host_id", "") or "")
+        # Set only for a server adopted from a copy of this app already installed on the
+        # host, where that id was already taken locally. The unit name and the folder on
+        # the host are built from this, so the two apps agree about which server is which.
+        self.remote_id: str = str(data.get("remote_id", "") or "")
 
     @property
     def is_remote(self) -> bool:
         return bool(self.host_id)
+
+    @property
+    def unit_id(self) -> str:
+        """The id the host knows this server by, which is not always the local one."""
+        return self.remote_id or self.id
 
     @property
     def host(self):
@@ -215,6 +225,7 @@ class ServerInfo:
             "path": str(self.server_dir),
             "autostart": self.autostart,
             "host_id": self.host_id,
+            "remote_id": self.remote_id,
         }
 
 class ServerManager(EventEmitter):
@@ -304,6 +315,23 @@ class ServerManager(EventEmitter):
 
         return info
 
+    def attach_server(self, info: ServerInfo) -> ServerInfo:
+        """Take an existing server folder into this app's list without touching it.
+
+        add_server() makes a new server: it mints an id and creates the directory. This
+        is the other case -- the folder is already there, on a host, with a world in it,
+        put there by another copy of this app. Creating anything here would be wrong.
+        """
+        if not info.id:
+            raise ValueError("a server record needs an id")
+        if info.id in self._servers:
+            raise ValueError(f"a server with the id {info.id} is already in this app")
+
+        self._servers[info.id] = info
+        self._save()
+        self.emit_on_main_thread("server-added", info.id)
+        return info
+
     def rename_server(self, server_id: str, new_name: str):
         info = self._servers.get(server_id)
         if info:
@@ -341,6 +369,24 @@ class ServerManager(EventEmitter):
 
         info.autostart = autostart
         self._save()
+
+        if info.is_remote:
+            # For a server on another machine, autostart has to mean something stronger
+            # than "when this app opens": the host may boot without anyone opening
+            # anything. Its own service manager is asked to bring the server up.
+            def apply_remote() -> None:
+                try:
+                    host = info.host
+                    host.ops.service(host, info.unit_id, str(info.server_dir)).enable_autostart(
+                        autostart, description=info.name
+                    )
+                except Exception:
+                    # The switch is still saved; a host that was unreachable picks the
+                    # setting up the next time its unit is written, which is at start.
+                    pass
+
+            threading.Thread(target=apply_remote, daemon=True).start()
+
         self.emit_on_main_thread("server-changed", server_id)
         return True, None
 
@@ -1356,17 +1402,16 @@ class ServerManager(EventEmitter):
             del self._processes[server_id]
 
         if info.is_remote:
-            # The unit outlives the folder, so it has to be withdrawn explicitly or the
-            # host is left with a service pointing at nothing.
+            # The unit or task outlives the folder, so it has to be withdrawn explicitly
+            # or the host is left with a service pointing at nothing.
             try:
-                from niksnaks_hosting.shared.remote.systemd_service import SystemdService
-
-                SystemdService(info.host, server_id, str(info.server_dir)).remove_unit()
+                host = info.host
+                host.ops.service(host, info.unit_id, str(info.server_dir)).remove_unit()
             except Exception:
                 pass
             if delete_files:
                 try:
-                    info.host.run(["rm", "-rf", "--", str(info.server_dir)], timeout=300)
+                    info.host.ops.remove_tree(info.host, str(info.server_dir))
                 except Exception:
                     pass
         elif delete_files and info.server_dir.exists():
@@ -1408,7 +1453,7 @@ class ServerManager(EventEmitter):
 
                 process = RemoteServerProcess(
                     host=info.host,
-                    server_id=server_id,
+                    server_id=info.unit_id,
                     server_dir=str(info.server_dir),
                     java_path=java_path,
                     ram_mb=info.ram_mb,

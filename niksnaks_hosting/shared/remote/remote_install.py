@@ -99,8 +99,11 @@ class RemoteLoaderInstaller:
 
             if progress:
                 progress(0.45, _("Installing {} on {}").format(name, self.host.name))
+            # A path stops being POSIX the moment it enters a command line: on a Windows
+            # host the installer would otherwise be handed /C:/Users/... , which Java
+            # reads as a folder called C: at the root of the drive.
             result = self.host.run(
-                [java_path, "-jar", str(installer), "--installServer"],
+                [java_path, "-jar", self.host.to_native(installer), "--installServer"],
                 timeout=INSTALL_TIMEOUT,
                 cwd=str(root),
             )
@@ -128,7 +131,10 @@ class RemoteLoaderInstaller:
                 installer_url, str(installer), progress=None, timeout=INSTALL_TIMEOUT
             )
 
-            command = [java_path, "-jar", str(installer), "server", "-mcversion", mc_version, "-dir", str(root)]
+            command = [
+                java_path, "-jar", self.host.to_native(installer),
+                "server", "-mcversion", mc_version, "-dir", self.host.to_native(root),
+            ]
             if loader_version:
                 command += ["-loader", loader_version]
             if progress:
@@ -184,6 +190,59 @@ def _describe_failure(result) -> str:
     if text:
         return text[-600:]
     return _("it exited with status {} and said nothing.").format(result.exit_status)
+
+
+def install_remote_bedrock(
+    host: SshHost,
+    server_dir: str,
+    option,
+    progress: ProgressFn | None = None,
+) -> None:
+    """Put a Bedrock server on a host. No Java, no loader -- one zip and a binary.
+
+    The zip is fetched by the host, like everything else here: it is a few hundred
+    megabytes, and there is no reason for it to travel to this machine first. Which zip
+    depends on the host's own platform, not this one's, which is why the caller has to
+    have asked BedrockManager for that platform's build.
+    """
+    from niksnaks_hosting.shared.backend.bedrock_manager import BEDROCK_USER_AGENT
+
+    ops = host.ops
+    root = host.path(server_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    archive = f"{server_dir}/bedrock-server.zip"
+
+    if progress:
+        progress(0.0, _("Downloading Bedrock {} on {}").format(option.version, host.name))
+    # Mojang's download refuses a request with no user agent, and a plain curl one is
+    # exactly the shape it refuses.
+    host.fetch_url(
+        option.url,
+        archive,
+        progress=(lambda f, n: progress(f * 0.7, _("Downloading Bedrock {}").format(option.version)))
+        if progress
+        else None,
+        timeout=INSTALL_TIMEOUT,
+        user_agent=BEDROCK_USER_AGENT,
+    )
+
+    if progress:
+        progress(0.75, _("Unpacking Bedrock {} on {}").format(option.version, host.name))
+    unpack = ops.extract_archive(host, archive, server_dir)
+    if not unpack.ok:
+        raise SshError(
+            _("Could not unpack the Bedrock server on {}: {}").format(host.name, unpack.output)
+        )
+    host.path(archive).unlink(missing_ok=True)
+
+    binary = root / ops.bedrock_binary
+    if not binary.is_file():
+        raise SshError(
+            _("The Bedrock server was unpacked on {} but its program is not in it.").format(host.name)
+        )
+    ops.make_executable(host, host.to_native(binary))
+    if progress:
+        progress(1.0, _("Bedrock {} ready").format(option.version))
 
 
 def install_remote_server(
