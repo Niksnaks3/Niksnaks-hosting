@@ -59,10 +59,14 @@ graphs in the same window.
   optimisation mods.
 - **Start from a backup** — build a brand-new server straight out of a full backup, which
   doubles as a way to clone an existing one.
-- **Run on another machine** — add a host over SSH and create servers on it. The app
-  installs Java and the loader there, runs each server as a systemd user service, and
+- **Run on another machine** — add a host over SSH right from the create-server wizard,
+  Windows or Linux, and give its password once. The app installs a dedicated key so it
+  never asks again, then installs Java and the loader on the host and runs the server
+  there — as a systemd user service on Linux, or a Scheduled Task on Windows — and
   streams its console back. Servers keep running on the host after you close the app,
   and are picked up again next time you open it.
+- **Adopt an existing install** — if Niksnaks-Hosting is already managing servers on that
+  host, the app finds them and offers to bring them under this app's control too.
 
 ### Mods, modpacks & worlds
 
@@ -221,6 +225,8 @@ niksnaks_hosting/          # Application package
     ├── backend/           # server_manager, java_manager, modrinth_client,
     │                      # curseforge_client, download_manager, playit_manager,
     │                      # bedrock_manager, server_process, config_manager, …
+    ├── remote/            # SSH hosts: key auth, Windows/Linux ops, RCON,
+    │                      # remote install adoption
     └── core/              # event bus
 po/                        # Translations (.pot, .po, LINGUAS, POTFILES)
 packaging/                 # Flatpak, Linux (desktop/metainfo/icons), Windows
