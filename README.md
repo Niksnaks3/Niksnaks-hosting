@@ -72,8 +72,14 @@ graphs in the same window.
   server started by the copy of Niksnaks-Hosting on the other computer still shows up
   here as running, still streams its log, still takes console commands, and still stops
   from here. It works the other way round too: a server this app started on another
-  machine can be watched and stopped from the app running on that machine. Server
-  pictures live in the server folder as well, so both ends show the same one.
+  machine shows up as running in the app on that machine, whose console reads it and
+  whose stop button stops it — even though the server belongs to no process that app
+  can see. Server pictures live in the server folder as well, so both ends show the
+  same one.
+- **A server made on a host belongs to that host** — create one over SSH and it is put
+  where the copy of Niksnaks-Hosting on that machine keeps its own, and written into
+  that machine's server list, so it appears over there like any other server it runs.
+  Rename it, give it a picture or delete it from here and the other end follows.
 
 ### Mods, modpacks & worlds
 

@@ -84,6 +84,30 @@ def remote_data_dirs(host: SshHost) -> list[str]:
     return [f"{home}/{tail}" for tail in DATA_DIR_CANDIDATES.get(platform, DATA_DIR_CANDIDATES["posix"])]
 
 
+def remote_data_dir(host: SshHost) -> str:
+    """The folder the far machine's copy of this app keeps its data in, or ''.
+
+    Two passes, because "installed" is a stronger claim than "there is a folder with the
+    right name". An install that has been run has a servers.json, even an empty one; a
+    bare directory is what a half-removed Flatpak leaves behind, and picking that one
+    would have new servers written where the app that is actually in use never looks.
+    """
+    folders = remote_data_dirs(host)
+    for folder in folders:
+        try:
+            if host.path(f"{folder}/{CONFIG_NAME}").is_file():
+                return folder
+        except Exception:
+            continue
+    for folder in folders:
+        try:
+            if host.path(folder).is_dir():
+                return folder
+        except Exception:
+            continue
+    return ""
+
+
 def discover_remote_servers(
     manager: ServerManager, host: SshHost, data_dir: str = ""
 ) -> tuple[list[RemoteServerCandidate], str]:

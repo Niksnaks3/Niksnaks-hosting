@@ -180,6 +180,11 @@ class ServerInfo:
         # host, where that id was already taken locally. The unit name and the folder on
         # the host are built from this, so the two apps agree about which server is which.
         self.remote_id: str = str(data.get("remote_id", "") or "")
+        # True for a server this app made on a host, which means the copy of this app
+        # over there is told about it and kept up to date. False for one that came the
+        # other way: that record is the far app's, and writing over it would undo
+        # settings it owns.
+        self.mirrored: bool = bool(data.get("mirrored", False))
 
     @property
     def is_remote(self) -> bool:
@@ -228,7 +233,70 @@ class ServerInfo:
             "autostart": self.autostart,
             "host_id": self.host_id,
             "remote_id": self.remote_id,
+            "mirrored": self.mirrored,
         }
+
+def _config_stamp() -> tuple[int, int]:
+    """Enough of servers.json to tell whether anything has written to it."""
+    try:
+        stat = CONFIG_FILE.stat()
+        return (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        return (0, 0)
+
+
+def _disk_servers() -> list[dict]:
+    """The entries in servers.json right now, whoever put them there."""
+    try:
+        with open(CONFIG_FILE) as f:
+            data = json.load(f)
+        entries = data["servers"]
+    except Exception:
+        return []
+    return [entry for entry in entries if isinstance(entry, dict)] if isinstance(entries, list) else []
+
+
+def _adopt_fields(existing: ServerInfo, fresh: ServerInfo) -> None:
+    """Take on what another copy of this app changed, in place.
+
+    The object itself is kept rather than replaced: a server's process, its config and
+    its row all hold a reference to it, and swapping it out would leave them pointed at
+    a record nothing else updates. The id is never copied -- it is what makes these two
+    the same server.
+    """
+    for field in (
+        "name",
+        "mc_version",
+        "edition",
+        "loader_type",
+        "loader_version",
+        "ram_mb",
+        "java_version",
+        "jvm_args",
+        "icon_path",
+        "created_at",
+        "path",
+        "autostart",
+        "host_id",
+        "remote_id",
+        "mirrored",
+    ):
+        setattr(existing, field, getattr(fresh, field))
+
+
+def _host_record(info: ServerInfo) -> dict:
+    """The entry the machine a server lives on should keep for it in its own list."""
+    record = info.to_dict()
+    # Over there it is a server on this computer, run by the app that is reading this.
+    record["id"] = info.unit_id
+    record["host_id"] = ""
+    record["remote_id"] = ""
+    record.pop("mirrored", None)
+    # Starting at boot is the unit's job, and it is already enabled for it. Asking the
+    # far app to do it as well would have two things starting one world at once.
+    record["autostart"] = False
+    return record
+
 
 class ServerManager(EventEmitter):
     def __init__(self):
@@ -243,6 +311,19 @@ class ServerManager(EventEmitter):
         # Held for the length of one sweep over the remote servers, so a slow host
         # cannot leave rounds of it running on top of each other.
         self._remote_refresh = threading.Semaphore(1)
+        # What the servers.json on disk held when this app last read or wrote it, and
+        # which ids it has deliberately deleted. Both are needed to tell a server
+        # another copy of this app has just added from one this app has just removed:
+        # on disk they look identical, and the two want opposite treatment.
+        self._config_stamp: tuple[int, int] = (0, 0)
+        self._disk_ids: set[str] = set()
+        self._forgotten: set[str] = set()
+        # The record each host has been given for the servers made on it, so a change
+        # that did not touch anything the host cares about costs no round trips.
+        self._mirrored: dict[str, str] = {}
+        self._mirror_queue: set[str] = set()
+        self._mirror_lock = threading.Lock()
+        self._mirror_busy = False
         # get_process is called from the main thread and from the sweep above, and two
         # callers building the same server's process would leave one of them orphaned
         # with a console reader running against a process nothing points at any more.
@@ -262,17 +343,179 @@ class ServerManager(EventEmitter):
                 for entry in data.get("servers", []):
                     info = ServerInfo(entry)
                     self._servers[info.id] = info
+                self._disk_ids = set(self._servers)
             except Exception as e:
                 print(f"Failed to load servers: {e}")
+        self._config_stamp = _config_stamp()
 
     def _save(self):
-        data = {"servers": [s.to_dict() for s in self._servers.values()]}
+        """Write the list out, keeping whatever else is in the file.
+
+        This machine's server list stopped being this app's alone the moment a copy on
+        another computer could make a server here: that copy adds an entry to this very
+        file, and this app may not have read it yet. Rewriting from memory alone would
+        delete it, so an entry with an id this app has never had is carried through
+        untouched and picked up properly by the next sweep.
+        """
+        # One snapshot for the whole write: a sweep on another thread can take a server
+        # in or out while this runs, and half a list is worse than either version of it.
+        listed = list(self._servers.values())
+        records = [info.to_dict() for info in listed]
+        known = {info.id for info in listed} | self._forgotten
+        carried = False
+        for entry in _disk_servers():
+            entry_id = str(entry.get("id", "") or "")
+            if entry_id and entry_id not in known:
+                records.append(entry)
+                carried = True
+
         try:
             CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(CONFIG_FILE, "w") as f:
-                json.dump(data, f, indent=2)
+            # Written beside the real file and moved into place: another copy of this
+            # app reads it whenever it changes, and a write caught halfway through
+            # would read as every server on this machine having been deleted at once.
+            staging = CONFIG_FILE.with_name(CONFIG_FILE.name + ".new")
+            with open(staging, "w") as f:
+                json.dump({"servers": records}, f, indent=2)
+            os.replace(staging, CONFIG_FILE)
+            self._disk_ids = {str(r.get("id", "") or "") for r in records}
+            # Normally this app has just written what it already knows, and re-reading
+            # its own file would be work for nothing. Not when something came through
+            # that it has not read yet: leaving the mark unset is what sends the next
+            # sweep back to the file to pick that server up properly.
+            self._config_stamp = (0, 0) if carried else _config_stamp()
         except Exception as e:
             print(f"Failed to save servers: {e}")
+
+        self._mirror_to_hosts()
+
+    def absorb_external_changes(self) -> bool:
+        """Take in whatever another copy of this app has written to the server list.
+
+        A copy on another computer adds an entry here when it makes a server on this
+        machine, and takes it out again when the server is deleted. Reading the file
+        back whenever it has changed underneath us is what makes a server made from over
+        there appear in this window without anybody restarting anything.
+        """
+        stamp = _config_stamp()
+        if stamp == self._config_stamp:
+            return False
+        self._config_stamp = stamp
+
+        try:
+            with open(CONFIG_FILE) as f:
+                data = json.load(f)
+            entries = data["servers"]
+            if not isinstance(entries, list):
+                return False
+        except Exception:
+            # An unreadable file says nothing about what exists. Treating it as an
+            # empty list would empty the window.
+            return False
+
+        changed = False
+        seen: set[str] = set()
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            server_id = str(entry.get("id", "") or "")
+            if not server_id or server_id in self._forgotten:
+                continue
+            seen.add(server_id)
+            try:
+                fresh = ServerInfo(entry)
+            except Exception:
+                continue
+            existing = self._servers.get(server_id)
+            if existing is None:
+                # Its own signal: a server that turned up because another copy of this
+                # app made one here is not one somebody at this keyboard just asked
+                # for, and the two want different treatment on screen.
+                self._servers[server_id] = fresh
+                self.emit_on_main_thread("server-appeared", server_id)
+                changed = True
+            elif existing.to_dict() != fresh.to_dict():
+                _adopt_fields(existing, fresh)
+                self._icon_cache.pop(server_id, None)
+                self.emit_on_main_thread("server-changed", server_id)
+                changed = True
+
+        # Only entries that were in the file last time count as removed. One this app
+        # has just added is missing for the opposite reason -- it has not been written
+        # yet -- and dropping it would undo the thing that is in the middle of happening.
+        for server_id in sorted(self._disk_ids - seen):
+            if server_id not in self._servers:
+                continue
+            self._servers.pop(server_id, None)
+            self._processes.pop(server_id, None)
+            self._icon_cache.pop(server_id, None)
+            self.emit_on_main_thread("server-removed", server_id)
+            changed = True
+
+        self._disk_ids = seen
+        return changed
+
+    # ------------------------------------------------------------ the other end
+    def _mirror_to_hosts(self) -> None:
+        """Tell each host's own copy of this app about the servers made on it from here.
+
+        Off the thread that asked, always: this is an SSH round trip per host, and it
+        happens on the back of ordinary things like renaming a server. A host that is
+        asleep simply misses this round and is told on the next one.
+        """
+        ids = [info.id for info in list(self._servers.values()) if info.host_id and info.mirrored]
+        if not ids:
+            return
+        with self._mirror_lock:
+            self._mirror_queue.update(ids)
+            if self._mirror_busy:
+                return
+            self._mirror_busy = True
+        threading.Thread(target=self._mirror_worker, daemon=True).start()
+
+    def _mirror_worker(self) -> None:
+        from niksnaks_hosting.shared.remote.remote_registry import publish_server
+
+        while True:
+            with self._mirror_lock:
+                if not self._mirror_queue:
+                    self._mirror_busy = False
+                    return
+                server_id = self._mirror_queue.pop()
+
+            info = self._servers.get(server_id)
+            if info is None or not (info.host_id and info.mirrored):
+                continue
+            try:
+                record = _host_record(info)
+                written = json.dumps(record, sort_keys=True)
+                if self._mirrored.get(server_id) == written:
+                    continue
+                if publish_server(info.host, record):
+                    self._mirrored[server_id] = written
+            except Exception:
+                # Nothing here is worth interrupting the app for. The record is sent
+                # again the next time anything changes or the next state sweep runs.
+                continue
+
+    def _withdraw_from_host(self, info: ServerInfo) -> None:
+        """Take a deleted server out of the list its own machine keeps."""
+        try:
+            host, unit_id = info.host, info.unit_id
+        except Exception:
+            # The machine itself has been removed from this app, which takes its
+            # servers with it. There is nothing left to tell.
+            return
+
+        def worker() -> None:
+            from niksnaks_hosting.shared.remote.remote_registry import withdraw_server
+
+            try:
+                withdraw_server(host, unit_id)
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
 
     @property
     def servers(self) -> list[ServerInfo]:
@@ -298,9 +541,20 @@ class ServerManager(EventEmitter):
 
         if host_id:
             from niksnaks_hosting.shared.remote.hosts_manager import get_hosts_manager
+            from niksnaks_hosting.shared.remote.remote_adopt import remote_data_dir
 
             host = get_hosts_manager().require(host_id)
-            server_path = f"{host.home}/{REMOTE_SERVERS_DIR}/{server_id}"
+            # Inside the far app's own data folder when there is one, so the copy of
+            # this app over there can reach the server it is about to be told it has.
+            # That matters most where it is least obvious: a Flatpak install can only
+            # see its own data folder, and a server put in the login user's home would
+            # appear in its list as a folder it is not allowed to open.
+            try:
+                data_dir = remote_data_dir(host)
+            except Exception:
+                data_dir = ""
+            root = f"{data_dir}/servers" if data_dir else f"{host.home}/{REMOTE_SERVERS_DIR}"
+            server_path = f"{root}/{server_id}"
         else:
             server_path = str(SERVERS_DIR / server_id)
 
@@ -316,6 +570,9 @@ class ServerManager(EventEmitter):
                 "java_version": java_ver,
                 "path": server_path,
                 "host_id": host_id,
+                # Made by this app on that machine, so the copy of this app over there
+                # is told about it and kept up to date.
+                "mirrored": bool(host_id),
             }
         )
 
@@ -1561,6 +1818,12 @@ class ServerManager(EventEmitter):
             delete_registered(info.server_dir)
 
         del self._servers[server_id]
+        # Remembered so the entry still on disk, or one written by another copy of this
+        # app a moment ago, is not read back in as a server that has come back.
+        self._forgotten.add(server_id)
+        self._mirrored.pop(server_id, None)
+        if info.is_remote and info.mirrored:
+            self._withdraw_from_host(info)
         self._save()
         self.emit_on_main_thread("server-removed", server_id)
 
@@ -1670,6 +1933,12 @@ class ServerManager(EventEmitter):
         holds each of its servers up for a connect timeout, and rounds that overlapped
         would pile threads up behind it for as long as it stayed away.
         """
+        # Before asking what is running: a server another copy of this app has just
+        # made on this machine is one this app has to know about before it can ask.
+        self.absorb_external_changes()
+        # And a host that was asleep when something changed here is told now.
+        self._mirror_to_hosts()
+
         if not self._remote_refresh.acquire(blocking=False):
             return
 

@@ -248,6 +248,7 @@ class Sidebar(Gtk.Box):
         menu_btn.add_controller(self._menu_header_controller)
 
         server_manager.connect("server-added", self._on_server_added)
+        server_manager.connect("server-appeared", self._on_server_appeared)
         server_manager.connect("server-removed", self._on_server_removed)
         server_manager.connect("server-changed", self._on_server_changed)
 
@@ -277,6 +278,16 @@ class Sidebar(Gtk.Box):
             row = self._rows.get(server_id)
             if row:
                 self._listbox.select_row(row)
+
+    def _on_server_appeared(self, manager, server_id):
+        """A server another copy of this app has just made on this machine.
+
+        Listed but not selected: nobody here asked for it, and whoever is sitting at
+        this window is in the middle of looking at something else.
+        """
+        info = manager.get_server(server_id)
+        if info:
+            self._add_row(info)
 
     def _on_server_removed(self, manager, server_id):
         row = self._rows.pop(server_id, None)
