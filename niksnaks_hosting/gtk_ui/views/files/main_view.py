@@ -246,10 +246,16 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
                     break
                 self._nav.pop()
 
-    def _server_dir(self) -> Path | None:
+    def _server_dir(self):
+        """The server's folder, on whichever machine that happens to be.
+
+        Handed back as ServerInfo built it: a Path here, a RemotePath for a server on
+        another computer. Rebuilding it as a Path raised before this tab had finished
+        loading, which is what made a remote server's files unreachable.
+        """
         if not self._server_info:
             return None
-        return Path(self._server_info.server_dir)
+        return self._server_info.server_dir
 
     def _process(self):
         if not self._server_info or not self._server_manager:
@@ -270,6 +276,19 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
         rows.clear()
 
     def _rebuild_lists(self) -> None:
+        """Redraw the tab from the server's folder, wherever that folder is.
+
+        Everything below reads that folder, so for a server on another computer this is
+        a run of SFTP calls -- and a machine that is asleep answers with an error rather
+        than with a file. Half a Files tab is a poor result; a selection that never
+        finishes because of it is a worse one, so the failure stops here.
+        """
+        try:
+            self._rebuild_lists_now()
+        except Exception:
+            pass
+
+    def _rebuild_lists_now(self) -> None:
         if not self._worlds_group or not self._mods_group:
             return
 
@@ -470,15 +489,29 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
         if not self._backups_row:
             return
 
-        bdir = self._backups_dir()
-        if not bdir:
-            self._backups_row.set_subtitle(_("No server selected"))
+        try:
+            bdir = self._backups_dir()
+            count = sum(1 for _ in bdir.glob("*.zip")) if bdir else -1
+        except Exception:
+            # The machine this server lives on is not answering. Saying so is better
+            # than the whole tab refusing to open over a count.
+            self._backups_row.set_subtitle(_("Could not be read"))
             return
 
-        count = sum(1 for _ in bdir.glob("*.zip"))
+        if count < 0:
+            self._backups_row.set_subtitle(_("No server selected"))
+            return
         self._backups_row.set_subtitle(_("{} backup(s)").format(count))
 
     def _build_worlds_snapshot(self) -> tuple[tuple[str, tuple[str, ...]], ...]:
+        try:
+            return self._worlds_snapshot_now()
+        except Exception:
+            # This runs on the once-a-second poll, so an unreachable machine raising
+            # here would stop that timer for the whole window, not just this tab.
+            return tuple()
+
+    def _worlds_snapshot_now(self) -> tuple[tuple[str, tuple[str, ...]], ...]:
         root = self._server_dir()
         if not root or not root.is_dir():
             return tuple()
@@ -505,7 +538,10 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
     def _build_disabled_snapshot(self) -> tuple[tuple[str, str, str], ...]:
         if not self._server_manager or not self._server_info:
             return tuple()
-        data = self._server_manager.get_incompatible_components(self._server_info.id)
+        try:
+            data = self._server_manager.get_incompatible_components(self._server_info.id)
+        except Exception:
+            return tuple()
         items: list[tuple[str, str, str]] = []
         for key in ("modpacks", "mods", "datapacks"):
             for item in data.get(key, []):

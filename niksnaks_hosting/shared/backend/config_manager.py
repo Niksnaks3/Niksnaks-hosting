@@ -37,6 +37,22 @@ class ConfigManager:
         self._loaded = True
         return dict(self._properties)
 
+    def try_load(self) -> bool:
+        """Load the properties, or say it could not be done. Never raises.
+
+        For a server on another machine the read fails when the machine is not
+        answering, which is not the same as the file being empty. Nothing is marked as
+        loaded in that case, so a later save() reads it properly first or refuses --
+        writing back what little was in memory would be how a server.properties gets
+        truncated by a computer having been asleep.
+        """
+        try:
+            self.load()
+            return True
+        except Exception:
+            self._loaded = False
+            return False
+
     def save(self):
         if not self._loaded:
             self.load()

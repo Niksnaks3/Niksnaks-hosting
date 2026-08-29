@@ -8,6 +8,7 @@ from typing import Any
 
 from niksnaks_hosting.shared.core.events import EventEmitter
 from niksnaks_hosting.shared.remote.host import LOCAL_HOST_ID, Host, LocalHost, SshHost
+from niksnaks_hosting.shared.remote.key_auth import existing_app_key
 from niksnaks_hosting.shared.remote.ssh_client import SshCredentials, SshError
 from niksnaks_hosting.shared.utils.constants import DATA_DIR
 
@@ -48,6 +49,9 @@ class HostsManager(EventEmitter):
                 username=str(raw.get("username", "")),
                 key_path=str(raw.get("key_path", "")),
                 known_host_key=str(raw.get("known_host_key", "")),
+                # A host saved with no key of its own may still have been given the
+                # app's, so it is worth offering before deciding a password is needed.
+                fallback_key_path=existing_app_key(),
             )
             host = SshHost(
                 str(raw["id"]),
@@ -128,6 +132,7 @@ class HostsManager(EventEmitter):
             password=password,
             key_path=key_path.strip(),
             key_passphrase=key_passphrase,
+            fallback_key_path=existing_app_key(),
         )
         host = SshHost(uuid.uuid4().hex[:12], name.strip() or credentials.label, credentials)
         host.on_platform_detected = self._remember_platform

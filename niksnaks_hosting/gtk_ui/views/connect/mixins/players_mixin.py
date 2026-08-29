@@ -99,8 +99,9 @@ class PlayersMixin:
         if not path or not path.exists():
             return []
         try:
-            with open(path, encoding="utf-8") as f:
-                raw = json.load(f)
+            # Through the path object rather than the builtin open(): for a server on
+            # another computer this is a RemotePath, which knows how to fetch itself.
+            raw = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             return []
         if not isinstance(raw, list):
@@ -121,8 +122,7 @@ class PlayersMixin:
             return False
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(entries, f, indent=2)
+            path.write_text(json.dumps(entries, indent=2), encoding="utf-8")
             return True
         except Exception:
             return False
@@ -143,13 +143,29 @@ class PlayersMixin:
         self._player_rows_by_group[container].append(row)
 
     def _refresh_player_lists(self):
+        """Show who is whitelisted and who is banned, from files on whichever machine.
+
+        Reading them is the slow half for a server on another computer, so it goes
+        through _read_server_files; the rows are always built back on the main thread.
+        """
+        whitelist_path, banned_path = self._player_list_paths()
+        if not whitelist_path:
+            self._apply_player_lists(None)
+            return
+
+        self._read_server_files(
+            lambda: (self._read_player_list(whitelist_path), self._read_player_list(banned_path)),
+            self._apply_player_lists,
+            ([], []),
+        )
+
+    def _apply_player_lists(self, lists):
         for row in self._whitelist_list_rows:
             self._clear_player_group_rows(row)
         for row in self._banned_list_rows:
             self._clear_player_group_rows(row)
 
-        whitelist_path, banned_path = self._player_list_paths()
-        if not whitelist_path:
+        if lists is None:
             self._update_player_section_summaries(0, 0)
             for row in self._whitelist_list_rows:
                 self._add_info_row(row, _("No server selected"))
@@ -157,8 +173,7 @@ class PlayersMixin:
                 self._add_info_row(row, _("No server selected"))
             return
 
-        whitelist = self._read_player_list(whitelist_path)
-        banned = self._read_player_list(banned_path)
+        whitelist, banned = lists
 
         if not whitelist:
             for container in self._whitelist_list_rows:

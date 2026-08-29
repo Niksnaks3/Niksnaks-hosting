@@ -6,6 +6,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk
 
+from niksnaks_hosting.gtk_ui.background import read_then_show
 from niksnaks_hosting.gtk_ui.loader_version_row import (
     build_loader_version_row,
     selected_loader_version,
@@ -451,8 +452,10 @@ class PropertiesView(Gtk.Box):
             if is_bedrock(self._server_info.edition):
                 edition_display = get_edition_display_name(self._server_info.edition)
                 version_text = f"{edition_display} · {self._server_info.mc_version or _('Unknown')}"
-                if self._server_manager and self._server_manager.bedrock_runtime_missing(self._server_info.id):
-                    version_text += " · " + _("server files missing")
+                # Whether the runtime is actually there is a look at the server's folder,
+                # which for one on another computer is a whole connect timeout away when
+                # that computer is off. Shown when it is known, not waited for here.
+                self._note_missing_bedrock_files(version_text)
             else:
                 loader_display = get_loader_display_name(self._server_info.loader_type)
                 version_text = f"{loader_display} · {self._server_info.mc_version or _('Unknown')}"
@@ -460,9 +463,7 @@ class PropertiesView(Gtk.Box):
                     version_text += f" ({self._server_info.loader_version})"
             self._version_row.set_subtitle(version_text)
 
-        if config:
-            config.load()
-            self._populate()
+        self._load_config_then_populate(config)
         self._populate_java_settings()
         self._refresh_upgrade_button()
 
@@ -472,14 +473,30 @@ class PropertiesView(Gtk.Box):
         self._change_version_btn.set_sensitive(False)
         self._change_version_btn.set_tooltip_text(_("Checking for newer Minecraft versions..."))
         bedrock = self._is_bedrock_server()
+        info = self._server_info
 
-        if bedrock and self._server_manager.bedrock_runtime_missing(self._server_info.id):
-            self._change_version_btn.set_sensitive(True)
-            self._change_version_btn.set_tooltip_text(_("Install the Bedrock server files for this computer"))
-            return
+        def showing_same_server() -> bool:
+            return self._server_info is info
 
         def worker():
-            current = self._server_info.mc_version
+            # Whether the Bedrock program is even in the folder is a look at that
+            # folder, which for a server on another computer is an SFTP call and, on a
+            # computer that is switched off, a whole connect timeout. It belongs on this
+            # thread beside the version lookup, not in front of it on the main one.
+            if bedrock and self._server_manager.bedrock_runtime_missing(info.id):
+
+                def offer_install():
+                    if showing_same_server():
+                        self._change_version_btn.set_sensitive(True)
+                        self._change_version_btn.set_tooltip_text(
+                            _("Install the Bedrock server files for this computer")
+                        )
+                    return False
+
+                GLib.idle_add(offer_install)
+                return
+
+            current = info.mc_version
             if bedrock:
                 versions = [option.version for option in self._server_manager.bedrock_manager.fetch_versions()]
             else:
@@ -487,6 +504,8 @@ class PropertiesView(Gtk.Box):
             has_upgrade = any(ServerManager.is_version_after(v, current) for v in versions)
 
             def done():
+                if not showing_same_server():
+                    return False
                 self._change_version_btn.set_sensitive(has_upgrade)
                 if has_upgrade:
                     self._change_version_btn.set_tooltip_text(_("Upgrade server version"))
@@ -983,10 +1002,40 @@ class PropertiesView(Gtk.Box):
         dialog.present(self.get_root())
 
     def reload_from_disk(self):
-        if not self._config:
+        self._load_config_then_populate(self._config)
+
+    def _note_missing_bedrock_files(self, version_text: str) -> None:
+        """Say on the version row if the Bedrock program is not in the server's folder."""
+        info = self._server_info
+        manager = self._server_manager
+        if not (info and manager):
             return
-        self._config.load()
-        self._populate()
+        read_then_show(
+            info.is_remote,
+            lambda: manager.bedrock_runtime_missing(info.id),
+            lambda missing: self._version_row.set_subtitle(
+                version_text + " · " + _("server files missing") if missing else version_text
+            ),
+            False,
+            still_wanted=lambda: self._server_info is info,
+        )
+
+    def _load_config_then_populate(self, config):
+        """Read server.properties, then fill the page in with what it said.
+
+        Off the main thread for a server on another computer, and never at the cost of
+        the page: a machine that is not answering leaves the fields as they were rather
+        than blanking every one of them.
+        """
+        if not config:
+            return
+        read_then_show(
+            bool(self._server_info and self._server_info.is_remote),
+            config.try_load,
+            lambda loaded: self._populate() if loaded else None,
+            False,
+            still_wanted=lambda: self._config is config,
+        )
 
     def _populate_java_settings(self):
         if not self._server_info or self._is_bedrock_server():

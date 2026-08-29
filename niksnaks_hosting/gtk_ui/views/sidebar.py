@@ -38,9 +38,34 @@ class ServerRow(Adw.ActionRow):
         self.attach_existing_process()
 
     def _subtitle_text(self) -> str:
+        parts = [self.server_info.mc_version, self._where_text()]
         if self._process and self._process.is_running:
-            return f"{self.server_info.mc_version} · {self._process.player_count}/{self._process.max_players}"
-        return self.server_info.mc_version
+            parts.append(f"{self._process.player_count}/{self._process.max_players}")
+        return " · ".join(part for part in parts if part)
+
+    def _where_text(self) -> str:
+        """Which computer this server is on, for one that is not on this computer.
+
+        Read from the saved host list and never from the machine itself: this runs on
+        the main thread every time a player joins or leaves.
+        """
+        if not self.server_info.is_remote:
+            return ""
+
+        from niksnaks_hosting.shared.remote.hosts_manager import get_hosts_manager
+
+        host = get_hosts_manager().get(self.server_info.host_id)
+        name = host.name if host else _("unknown computer")
+        if getattr(self._process, "host_unreachable", False):
+            # Not the same thing as the server being off, and the difference is the
+            # whole question when a row has gone quiet.
+            return _("{} · not reachable").format(name)
+        return name
+
+    def _set_subtitle_text(self) -> None:
+        text = self._subtitle_text()
+        if text != self.get_subtitle():
+            self.set_subtitle(text)
 
     def _update_icon(self):
         if self.server_info.icon_path:
@@ -53,15 +78,21 @@ class ServerRow(Adw.ActionRow):
 
     def _on_status_changed(self, process, status):
         self._update_status(status)
-        self.set_subtitle(self._subtitle_text())
+        self._set_subtitle_text()
 
     def _on_players_changed(self, process, player_count, max_players):
-        self.set_subtitle(self._subtitle_text())
+        self._set_subtitle_text()
 
     def _update_status(self, status: str):
         for cls in ["running", "starting", "stopping", "stopped"]:
             self._status_dot.remove_css_class(cls)
         self._status_dot.add_css_class(status)
+        if getattr(self._process, "host_unreachable", False) and status == ServerStatus.STOPPED:
+            # A hollow dot for "nobody has been able to ask": filling it in grey would
+            # be this row claiming to know the server is off, which is what it cannot do
+            # while its machine is unreachable.
+            self._status_dot.set_markup('<span foreground="#e5a50a">○</span>')
+            return
         color = {
             ServerStatus.RUNNING: "#2ec27e",
             ServerStatus.STARTING: "#e5a50a",
@@ -97,7 +128,7 @@ class ServerRow(Adw.ActionRow):
             self._update_status(process.status)
         else:
             self._update_status(ServerStatus.STOPPED)
-        self.set_subtitle(self._subtitle_text())
+        self._set_subtitle_text()
 
     def ensure_process_attached(self):
         if self._process:
@@ -113,9 +144,20 @@ class ServerRow(Adw.ActionRow):
     def update_info(self, server_info: ServerInfo):
         self.server_info = server_info
         self.set_title(server_info.name)
-        self.set_subtitle(self._subtitle_text())
+        self._set_subtitle_text()
         self.set_tooltip_text(server_info.mc_version)
         self._update_icon()
+
+    def refresh(self):
+        """Catch up with a process that appeared, or an answer that arrived, since.
+
+        A server on another computer is asked about on a thread, so the row is built
+        long before there is anything to say about it -- and a machine can drop off the
+        network while the row just sits there.
+        """
+        self.attach_existing_process()
+        self._update_status(self._process.status if self._process else ServerStatus.STOPPED)
+        self._set_subtitle_text()
 
 class Sidebar(Gtk.Box):
     __gsignals__ = {
@@ -243,6 +285,11 @@ class Sidebar(Gtk.Box):
         info = manager.get_server(server_id)
         if row and info:
             row.update_info(info)
+
+    def sync_rows(self):
+        """Bring every row up to date with what its server turned out to be doing."""
+        for row in self._rows.values():
+            row.refresh()
 
     def select_server(self, server_id: str):
         row = self._rows.get(server_id)

@@ -59,7 +59,11 @@ class NiksnaksHostingApplication(Adw.Application):
         # user can touch anything that could collide with them.
         threading.Thread(
             target=purge_pending_deletions,
-            args=([s.server_dir for s in self._server_manager.servers],),
+            # This computer's servers only. The journal and the trash sweep are plain
+            # local file operations, and a folder on another machine belongs to that
+            # machine's own copy of the app -- handing one over here only produced a
+            # path this computer cannot make sense of.
+            args=([s.server_dir for s in self._server_manager.servers if not s.is_remote],),
             daemon=True,
         ).start()
 

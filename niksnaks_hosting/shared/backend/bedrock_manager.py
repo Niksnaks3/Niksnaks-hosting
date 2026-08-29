@@ -7,9 +7,11 @@ import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import requests
 
+from niksnaks_hosting.shared.remote.paths import is_remote
 from niksnaks_hosting.shared.utils.constants import (
     BEDROCK_BINARY_NAMES,
     BEDROCK_DOWNLOAD_LINKS_URL,
@@ -208,18 +210,33 @@ class BedrockManager:
 
         return True, _("Bedrock server {} installed").format(option.version)
 
-    def server_binary(self, server_dir: str | Path) -> Path | None:
-        binary = Path(server_dir) / BEDROCK_SERVER_BINARY
+    @staticmethod
+    def _root(server_dir: Any):
+        """The folder as it was handed over: a Path here, a RemotePath on a host.
+
+        Rebuilding a remote folder as a Path asks this computer's disk about a name
+        from somebody else's, which is at best not there.
+        """
+        return server_dir if is_remote(server_dir) else Path(server_dir)
+
+    def server_binary(self, server_dir: Any, binary_name: str = BEDROCK_SERVER_BINARY):
+        """The Bedrock executable in this folder, wherever the folder is.
+
+        The name is a parameter because it belongs to the machine the folder is on: a
+        Windows host managed from a Linux desktop keeps a bedrock_server.exe, and
+        answering with this computer's spelling would describe the wrong disk.
+        """
+        binary = self._root(server_dir) / binary_name
         return binary if binary.is_file() else None
 
-    def is_installed(self, server_dir: str | Path) -> bool:
-        return self.server_binary(server_dir) is not None
+    def is_installed(self, server_dir: Any, binary_name: str = BEDROCK_SERVER_BINARY) -> bool:
+        return self.server_binary(server_dir, binary_name) is not None
 
-    def foreign_binary(self, server_dir: str | Path) -> Path | None:
+    def foreign_binary(self, server_dir: Any, binary_name: str = BEDROCK_SERVER_BINARY):
         """The other operating system's server executable, left behind by a backup from there."""
-        root = Path(server_dir)
+        root = self._root(server_dir)
         for name in BEDROCK_BINARY_NAMES:
-            if name == BEDROCK_SERVER_BINARY:
+            if name == binary_name:
                 continue
             candidate = root / name
             if candidate.is_file():

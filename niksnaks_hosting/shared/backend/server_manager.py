@@ -23,6 +23,7 @@ from niksnaks_hosting.shared.core.events import EventEmitter
 from niksnaks_hosting.shared.utils.constants import (
     BEDROCK_BINARY_NAMES,
     BEDROCK_DEFAULT_PORT,
+    BEDROCK_SERVER_BINARY,
     BEDROCK_WORLDS_DIR,
     CONFIG_FILE,
     DEFAULT_RAM_MB,
@@ -235,6 +236,13 @@ class ServerManager(EventEmitter):
         self._processes: dict[str, ServerProcess] = {}
         self._mods_operation_counts: dict[str, int] = {}
         self._remote_java: dict[str, object] = {}
+        # Held for the length of one sweep over the remote servers, so a slow host
+        # cannot leave rounds of it running on top of each other.
+        self._remote_refresh = threading.Semaphore(1)
+        # get_process is called from the main thread and from the sweep above, and two
+        # callers building the same server's process would leave one of them orphaned
+        # with a console reader running against a process nothing points at any more.
+        self._process_lock = threading.RLock()
         self.java_manager = JavaManager()
         self.download_manager = DownloadManager()
         self.bedrock_manager = BedrockManager()
@@ -618,6 +626,15 @@ class ServerManager(EventEmitter):
         if not info:
             return False, _("Server not found")
 
+        if info.is_remote:
+            # BedrockManager downloads and unpacks on this computer. Putting a Bedrock
+            # server on a host is a different job -- the host fetches its own zip, for
+            # its own platform -- and only the create-server wizard does it today.
+            return False, _(
+                "Reinstalling the Bedrock server files on {} is not supported yet. Create the "
+                "server again on that computer, or replace the files there by hand."
+            ).format(info.host.name)
+
         ok, msg = self.bedrock_manager.install(
             option,
             info.server_dir,
@@ -674,12 +691,31 @@ class ServerManager(EventEmitter):
         progress(1.0, _("Server runtime updated"))
         return True, _("Updated to Bedrock {}.").format(option.version)
 
+    def bedrock_binary_name(self, info: ServerInfo) -> str:
+        """What the machine this server lives on calls the Bedrock executable.
+
+        Not this computer's answer: a Linux desktop looking after a Windows host is
+        asking about a bedrock_server.exe, and the other way round.
+        """
+        if not info.is_remote:
+            return BEDROCK_SERVER_BINARY
+        try:
+            return info.host.ops.bedrock_binary
+        except Exception:
+            return BEDROCK_SERVER_BINARY
+
     def bedrock_runtime_missing(self, server_id: str) -> bool:
-        """Whether a Bedrock server has no executable this computer can run."""
+        """Whether a Bedrock server has no executable the machine it lives on can run."""
         info = self._servers.get(server_id)
         if not info or not is_bedrock(info.edition):
             return False
-        return not self.bedrock_manager.is_installed(info.server_dir)
+        try:
+            return not self.bedrock_manager.is_installed(info.server_dir, self.bedrock_binary_name(info))
+        except Exception:
+            # The machine could not be asked, which is not the same as the answer being
+            # no. Reporting the files as missing would offer to reinstall a server that
+            # is sitting there intact on a computer that happens to be switched off.
+            return False
 
     def repair_bedrock_runtime(
         self,
@@ -702,7 +738,7 @@ class ServerManager(EventEmitter):
         if process and process.is_running:
             return False, _("Cannot reinstall the server files while the server is running")
 
-        if self.bedrock_manager.is_installed(info.server_dir):
+        if self.bedrock_manager.is_installed(info.server_dir, self.bedrock_binary_name(info)):
             return True, _("The Bedrock server files are already installed.")
 
         def progress(frac: float, msg: str) -> None:
@@ -716,7 +752,7 @@ class ServerManager(EventEmitter):
         if not option:
             return False, _("Could not reach the Bedrock server download page")
 
-        foreign = self.bedrock_manager.foreign_binary(info.server_dir)
+        foreign = self.bedrock_manager.foreign_binary(info.server_dir, self.bedrock_binary_name(info))
 
         ok, msg = self.install_bedrock_server(
             server_id,
@@ -1420,45 +1456,54 @@ class ServerManager(EventEmitter):
         if not info:
             return None
 
+        with self._process_lock:
+            return self._make_process(server_id, info)
+
+    def _make_process(self, server_id: str, info: ServerInfo) -> ServerProcess:
         if server_id not in self._processes:
             server_is_bedrock = is_bedrock(info.edition)
-
-            java_path = ""
-            if not server_is_bedrock:
-                if info.is_remote:
-                    java_path = self.remote_java_path(info)
-                else:
-                    java_path = (
-                        self.java_manager.get_java_path(info.java_version) or shutil.which("java") or "java"
-                    )
-
-            config = self.get_config(server_id)
             default_max_players = 10 if server_is_bedrock else 20
-            max_players = default_max_players
-            if config:
-                config.load()
-                max_players = config.get_int("max-players", default_max_players)
 
             if info.is_remote:
                 from niksnaks_hosting.shared.remote.remote_process import RemoteServerProcess
 
+                # Nothing here may talk to the far machine. This runs on the main thread
+                # -- the window asks for a process while it is still building its first
+                # server row -- so a host that is asleep would freeze the app for the
+                # whole connect timeout before its window ever appeared. Everything that
+                # needs an answer from the host happens on the thread started below.
                 process = RemoteServerProcess(
                     host=info.host,
                     server_id=info.unit_id,
                     server_dir=str(info.server_dir),
-                    java_path=java_path,
+                    java_path="",
+                    java_path_provider=lambda i=info: self.remote_java_path(i),
                     ram_mb=info.ram_mb,
-                    max_players=max_players,
+                    max_players=default_max_players,
                     jvm_args=info.jvm_args,
                     loader_type=info.loader_type,
                     edition=info.edition,
                     description=info.name,
                 )
                 self._processes[server_id] = process
-                # A remote server keeps running while the app is closed, so the first
-                # time one is looked at, find out whether it is already up.
-                process.adopt_running_state()
+                threading.Thread(
+                    target=self._prepare_remote_process,
+                    args=(server_id, process),
+                    daemon=True,
+                ).start()
             else:
+                java_path = ""
+                if not server_is_bedrock:
+                    java_path = (
+                        self.java_manager.get_java_path(info.java_version) or shutil.which("java") or "java"
+                    )
+
+                config = self.get_config(server_id)
+                max_players = default_max_players
+                if config:
+                    config.load()
+                    max_players = config.get_int("max-players", default_max_players)
+
                 self._processes[server_id] = ServerProcess(
                     server_dir=str(info.server_dir),
                     java_path=java_path,
@@ -1470,6 +1515,64 @@ class ServerManager(EventEmitter):
                 )
 
         return self._processes[server_id]
+
+    def _prepare_remote_process(self, server_id: str, process) -> None:
+        """Everything about a remote server that only the far machine can answer.
+
+        Whether it is running comes first: that is what the server list is waiting to
+        find out, and a machine that has gone away then says so after one connect
+        timeout instead of sitting through a second one for a player limit.
+        """
+        process.adopt_running_state()
+        if process.host_unreachable:
+            return
+
+        config = self.get_config(server_id)
+        if config:
+            try:
+                config.load()
+                process.set_max_players(config.get_int("max-players", process.max_players))
+            except Exception:
+                # The player limit is a label on a status dot, not a reason to give up
+                # on a server whose state has already been established.
+                pass
+
+    def refresh_remote_states(self) -> None:
+        """Ask the hosts which of their servers are up, without holding up the app.
+
+        A server on another computer is never something this app can remember the state
+        of: it keeps running while the app is closed, and it can be started from over
+        there while the app is open. So the answer is asked for, and asked for again.
+
+        One worker for the whole sweep, and never two at once: a host that has gone away
+        holds each of its servers up for a connect timeout, and rounds that overlapped
+        would pile threads up behind it for as long as it stayed away.
+        """
+        if not self._remote_refresh.acquire(blocking=False):
+            return
+
+        remote_ids = [info.id for info in self.servers if info.is_remote]
+        if not remote_ids:
+            self._remote_refresh.release()
+            return
+
+        def worker() -> None:
+            try:
+                for server_id in remote_ids:
+                    process = self.get_existing_process(server_id)
+                    try:
+                        if process is None:
+                            # Making the process is itself what asks the host, so there
+                            # is nothing more to do for one that was not there yet.
+                            self.get_process(server_id)
+                        else:
+                            process.refresh_state()
+                    except Exception:
+                        continue
+            finally:
+                self._remote_refresh.release()
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def remote_java(self, info: ServerInfo):
         """The Java manager for the host a server lives on."""

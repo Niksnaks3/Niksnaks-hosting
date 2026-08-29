@@ -34,6 +34,10 @@ class ServerDetailView(Gtk.Box):
         self._perf_view: PerformanceView | None = None
         self._props_view: PropertiesView | None = None
         self._files_view: FilesView | None = None
+        # Which server the Files tab was last pointed at. Reading a server's folder is
+        # the expensive part of that tab -- a run of SFTP calls for one on another
+        # computer -- so it is not done for a tab nobody is looking at.
+        self._files_view_server_id = ""
 
         self._toolbar_view = Adw.ToolbarView()
         self._toolbar_view.set_hexpand(True)
@@ -145,6 +149,7 @@ class ServerDetailView(Gtk.Box):
             self._tab_hosts["files"].append(self._files_view)
             if self._current_server:
                 self._files_view.set_server(self._current_server, self._server_manager)
+                self._files_view_server_id = self._current_server.id
         return self._files_view
 
     def _push_fullscreen_page(self, page):
@@ -189,7 +194,12 @@ class ServerDetailView(Gtk.Box):
             config = self._server_manager.get_config(server_info.id)
             self._props_view.set_config(config, self._server_manager, server_info)
         if self._files_view:
-            self._files_view.set_server(server_info, self._server_manager)
+            if self._view_stack.get_visible_child_name() == "files":
+                self._files_view.set_server(server_info, self._server_manager)
+                self._files_view_server_id = server_info.id
+            else:
+                # Left for _on_tab_changed to do when somebody actually opens the tab.
+                self._files_view_server_id = ""
 
         self._update_toggle_for_selected(selected.status if selected else ServerStatus.STOPPED)
 
@@ -297,6 +307,9 @@ class ServerDetailView(Gtk.Box):
             GLib.idle_add(props.focus_save_button)
         elif tab_name == "files":
             files = self._ensure_files_view()
+            if self._current_server and self._files_view_server_id != self._current_server.id:
+                files.set_server(self._current_server, self._server_manager)
+                self._files_view_server_id = self._current_server.id
             files.refresh_worlds_if_changed(force=True)
 
     def poll_runtime_state(self) -> None:

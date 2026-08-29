@@ -14,12 +14,18 @@ from niksnaks_hosting.shared.backend.playit_config import load_playit_config
 from niksnaks_hosting.shared.backend.server_manager import ServerManager
 from niksnaks_hosting.shared.utils.constants import APP_ID
 
+# How often the machines that hold remote servers are asked what they are running. Slow
+# on purpose: a server that starts over there is not urgent news, and every round costs
+# an SSH round trip per server -- or a connect timeout for a host that has gone away.
+REMOTE_REFRESH_SECONDS = 20
+
 class NiksnaksHostingWindow(Adw.ApplicationWindow):
     def __init__(self, server_manager: ServerManager, **kwargs):
         super().__init__(**kwargs)
         self._server_manager = server_manager
         self._current_server_id = None
         self._status_poll_id = None
+        self._remote_poll_id = None
         self._running_server_ids: set[str] = set(self._server_manager.get_running_server_ids())
         self._playit_starting_server_ids: set[str] = set()
         self._playit_autostart_paused_ids: set[str] = set()
@@ -98,6 +104,15 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         server_manager.connect("server-removed", self._on_server_removed)
 
         self._status_poll_id = GLib.timeout_add(1000, self._poll_runtime_state)
+
+        # Servers on another computer keep running while this app is closed, and can be
+        # started from over there while it is open, so their state is asked for rather
+        # than assumed: once now, so the list is right as soon as it appears, and then
+        # on a slow timer. The work happens on threads; nothing here waits for it.
+        server_manager.refresh_remote_states()
+        self._remote_poll_id = GLib.timeout_add_seconds(
+            REMOTE_REFRESH_SECONDS, self._poll_remote_states
+        )
 
         self._quit_requested = False
         # Set while the servers are being stopped and backed up on the way out, and once
@@ -231,9 +246,19 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         if self._status_poll_id:
             GLib.source_remove(self._status_poll_id)
             self._status_poll_id = None
+        if self._remote_poll_id:
+            GLib.source_remove(self._remote_poll_id)
+            self._remote_poll_id = None
+
+    def _poll_remote_states(self):
+        self._server_manager.refresh_remote_states()
+        return True
 
     def _poll_runtime_state(self):
         self._detail_view.poll_runtime_state()
+        # Cheap, and the only thing that catches an answer that arrived from a host
+        # after the row that wanted it had already been built.
+        self._sidebar.sync_rows()
 
         current_ids = set(self._server_manager.get_running_server_ids())
         previous_ids = self._running_server_ids

@@ -75,6 +75,16 @@ def ensure_app_key() -> tuple[str, str]:
         return _generate_key()
 
 
+def existing_app_key() -> str:
+    """The path to the app's key if it already has one, without making one.
+
+    ensure_app_key() generates on demand, which is right when a key is about to be
+    installed and wrong everywhere else -- writing a keypair just to look at a host
+    would be a surprising thing for opening a dialog to do.
+    """
+    return str(KEY_PATH) if KEY_PATH.is_file() else ""
+
+
 def _generate_key() -> tuple[str, str]:
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey

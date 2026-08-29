@@ -15,6 +15,13 @@ KEEPALIVE_SECONDS = 20
 # How often an in-flight command is checked for new output or for having finished.
 POLL_SECONDS = 0.02
 
+# How long a failed connection is taken at its word before the host is tried again.
+# Without it, every part of the app that touches a machine which has gone away waits out
+# the full connect timeout of its own, one after another -- and a computer being switched
+# off is the ordinary case, not the exceptional one. Short enough that a host coming back
+# is noticed within one round of the status sweep.
+CONNECT_RETRY_SECONDS = 15.0
+
 
 class SshError(RuntimeError):
     """Anything that stopped the app talking to a host, phrased for a person."""
@@ -58,6 +65,11 @@ class SshCredentials:
     key_passphrase: str = ""
     # Base64 of the host key the app trusted the first time it connected.
     known_host_key: str = ""
+    # The app's own key, offered only when nothing else was configured. Deliberately not
+    # key_path: naming a key is a decision, so failing to use it is an error and the
+    # agent is turned off for it. This is a guess -- the host may never have been given
+    # it -- so it is tried quietly and everything else still gets its turn afterwards.
+    fallback_key_path: str = ""
 
     @property
     def label(self) -> str:
@@ -80,6 +92,10 @@ class SshConnection:
         self._sftp: Any = None
         self._lock = threading.RLock()
         self._trusted_key: str = credentials.known_host_key
+        # When the last attempt failed, and what it said, so the answer can be given
+        # again straight away instead of being waited for again.
+        self._failed_until: float = 0.0
+        self._failed_reason: str = ""
 
     # ------------------------------------------------------------------ lifetime
     @property
@@ -97,6 +113,9 @@ class SshConnection:
             self._connect_locked()
 
     def _connect_locked(self) -> None:
+        if time.monotonic() < self._failed_until:
+            raise SshError(self._failed_reason)
+
         paramiko = _import_paramiko()
         creds = self.credentials
 
@@ -106,6 +125,11 @@ class SshConnection:
         pkey = None
         if creds.key_path:
             pkey = _load_private_key(creds.key_path, creds.key_passphrase)
+        elif not creds.password:
+            # Nothing was configured, but this app installs one key of its own on every
+            # host it sets up. A host whose key_path went missing -- from a version that
+            # could not prove key login worked, say -- is reachable again on that alone.
+            pkey = _load_optional_key(creds.fallback_key_path)
 
         try:
             client.connect(
@@ -125,7 +149,9 @@ class SshConnection:
         except HostKeyChanged:
             raise
         except Exception as e:
-            raise SshError(_describe_connect_failure(e, creds)) from e
+            self._failed_reason = _describe_connect_failure(e, creds)
+            self._failed_until = time.monotonic() + CONNECT_RETRY_SECONDS
+            raise SshError(self._failed_reason) from e
 
         transport = client.get_transport()
         if transport is not None:
@@ -133,6 +159,8 @@ class SshConnection:
             # timers. A server left running overnight should still be reachable.
             transport.set_keepalive(KEEPALIVE_SECONDS)
 
+        self._failed_until = 0.0
+        self._failed_reason = ""
         self._client = client
         self._sftp = None
 
@@ -312,11 +340,37 @@ def _import_paramiko() -> Any:
     return paramiko
 
 
+def _key_classes(paramiko: Any) -> list[Any]:
+    """The key types this paramiko can read, in the order worth trying them.
+
+    Asked for by name rather than named outright: paramiko 5 removed DSSKey, and reading
+    the attribute raised AttributeError before a single key had been tried -- which took
+    down every key login in the app, including the check that decides whether a
+    password-only host can be converted to key auth at all.
+    """
+    wanted = ("Ed25519Key", "ECDSAKey", "RSAKey", "DSSKey")
+    return [cls for cls in (getattr(paramiko, name, None) for name in wanted) if cls is not None]
+
+
+def _load_optional_key(key_path: str) -> Any:
+    """A key to offer if it happens to be there, or None. Never raises.
+
+    The caller has something else to fall back on, so a missing or unreadable file here
+    is not worth failing a connection over.
+    """
+    if not key_path:
+        return None
+    try:
+        return _load_private_key(key_path)
+    except SshError:
+        return None
+
+
 def _load_private_key(key_path: str, passphrase: str = "") -> Any:
     paramiko = _import_paramiko()
     errors: list[str] = []
     # paramiko cannot tell key types apart from the file alone, so each is tried in turn.
-    for key_class in (paramiko.Ed25519Key, paramiko.ECDSAKey, paramiko.RSAKey, paramiko.DSSKey):
+    for key_class in _key_classes(paramiko):
         try:
             return key_class.from_private_key_file(key_path, password=passphrase or None)
         except Exception as e:  # noqa: PERF203 - the type of failure is the useful part

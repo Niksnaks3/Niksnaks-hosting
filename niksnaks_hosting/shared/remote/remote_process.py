@@ -47,6 +47,7 @@ class RemoteServerProcess(ServerProcess):
         loader_type: str = LOADER_FABRIC,
         edition: str = EDITION_JAVA,
         description: str = "",
+        java_path_provider: Callable[[], str] | None = None,
     ) -> None:
         super().__init__(
             server_dir=".",
@@ -62,10 +63,12 @@ class RemoteServerProcess(ServerProcess):
         # Overwrite what the base class made of the path: it is a folder on the host.
         self.server_dir = host.path(server_dir)
         self.description = description or f"Minecraft server {server_id}"
-        # Which kind of service this is -- a systemd user unit or a Scheduled Task --
-        # is the host's business, not this class's. Everything below asks the same
-        # questions either way.
-        self.service = host.ops.service(host, server_id, str(self.server_dir))
+        # Where Java lives on the far machine is one SSH round trip to answer, and it is
+        # not needed until this server is actually started. Held as a callable so
+        # building the object stays free of the network.
+        self._java_path_provider = java_path_provider
+        self._service = None
+        self._service_lock = threading.Lock()
         self._console_channel = None
         self._console_thread: threading.Thread | None = None
         self._watch_thread: threading.Thread | None = None
@@ -75,8 +78,25 @@ class RemoteServerProcess(ServerProcess):
         # it did not come from our unit/task, so its liveness has to be polled by
         # re-scanning the host instead of asking the service manager about itself.
         self._foreign = False
+        # Set when the machine could not be reached, so the app can say that instead of
+        # showing a server as switched off when it has simply lost sight of it.
+        self.host_unreachable = False
+        self._unreachable_said = ""
 
     # ------------------------------------------------------------------ identity
+    @property
+    def service(self):
+        """The host's way of keeping this server alive, resolved on first use.
+
+        Which kind it is -- a systemd user unit or a Scheduled Task -- is the host's
+        business, not this class's, and working it out can mean asking the machine.
+        __init__ runs on the main thread, so it must not be the place that asks.
+        """
+        with self._service_lock:
+            if self._service is None:
+                self._service = self.host.ops.service(self.host, self.server_id, str(self.server_dir))
+            return self._service
+
     @property
     def pid(self) -> int | None:
         return self._pid
@@ -96,6 +116,11 @@ class RemoteServerProcess(ServerProcess):
                 f"on {self.host.name}...\n"
             )
 
+        if not self.java_path and self._java_path_provider:
+            try:
+                self.java_path = self._java_path_provider()
+            except Exception:
+                self.java_path = ""
         if not self.java_path:
             return [], ""
 
@@ -361,8 +386,13 @@ class RemoteServerProcess(ServerProcess):
                 else:
                     try:
                         state = self.service.state()
-                    except Exception:
+                    except Exception as e:
+                        # Losing the link is not evidence the server went down, so the
+                        # status stays as it was -- but it is worth saying, or the row
+                        # goes on claiming to know something it stopped being told.
+                        self._note_unreachable(e)
                         continue
+                    self._clear_unreachable()
                     active = state.active
                     if active:
                         self._pid = state.pid or self._pid
@@ -391,6 +421,11 @@ class RemoteServerProcess(ServerProcess):
             return None
 
     def _claim_ownership(self) -> None:
+        # A server this app merely found is being looked after by whatever started it.
+        # Stamping our own marker on it would tell the other install that the folder
+        # had changed hands, when in fact we cannot even reach its console.
+        if self._foreign:
+            return
         try:
             from niksnaks_hosting.shared.remote.ownership import claim
 
@@ -429,6 +464,26 @@ class RemoteServerProcess(ServerProcess):
         self._console_channel = None
 
     # --------------------------------------------------------------------- state
+    def _note_unreachable(self, error: Exception) -> None:
+        """Say in this server's own console that its machine could not be reached.
+
+        Said once per distinct reason rather than on every poll: repeated every few
+        seconds it would bury the console, and the point is only that an answer is
+        waiting there for whoever wonders why the server reads as stopped.
+        """
+        self.host_unreachable = True
+        text = f"[Niksnaks-Hosting] Could not reach {self.host.name}: {error}\n"
+        if text == self._unreachable_said:
+            return
+        self._unreachable_said = text
+        self._emit_output(text)
+
+    def _clear_unreachable(self) -> None:
+        if self.host_unreachable:
+            self.host_unreachable = False
+            self._unreachable_said = ""
+            self._emit_output(f"[Niksnaks-Hosting] {self.host.name} is reachable again.\n")
+
     def adopt_running_state(self, pid: int | None = None) -> None:
         """Pick up a server that is already running rather than starting it.
 
@@ -446,11 +501,28 @@ class RemoteServerProcess(ServerProcess):
         if not self._foreign:
             try:
                 state = self.service.state()
-            except Exception:
+            except Exception as e:
+                # Staying silent here is what makes an unreachable machine look exactly
+                # like a server somebody switched off, which is the harder of the two to
+                # work out from the outside.
+                self._note_unreachable(e)
                 return
-            if not state.active:
-                return
-            pid = state.pid
+            self._clear_unreachable()
+            if state.active:
+                pid = state.pid
+            else:
+                # No unit of ours is up, which is not the same as the server being
+                # down. The far machine's own copy of this app starts its servers as
+                # plain child processes that no service manager knows about, and only
+                # looking for them finds those -- without this, a server somebody
+                # started over there reads as stopped here for as long as the app runs.
+                try:
+                    pid = self.service.foreign_process_pid()
+                except Exception:
+                    pid = 0
+                if not pid:
+                    return
+                self._foreign = True
 
         self._pid = pid
         self.status = ServerStatus.RUNNING
@@ -462,3 +534,14 @@ class RemoteServerProcess(ServerProcess):
             pass
         self._start_console_reader()
         self._start_state_watch()
+
+    def refresh_state(self) -> None:
+        """Ask the host again whether this server is up, for one that looks stopped.
+
+        A running server has a watcher of its own and needs nothing from here. A stopped
+        one has nothing watching it, so a server started on the far machine after this
+        app opened would otherwise stay greyed out until the next launch.
+        """
+        if self._status != ServerStatus.STOPPED:
+            return
+        self.adopt_running_state()

@@ -9,6 +9,7 @@ gi.require_version("Adw", "1")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Adw, Gdk, Gtk
 
+from niksnaks_hosting.gtk_ui.background import read_then_show
 from niksnaks_hosting.shared.backend.server_manager import ServerInfo, ServerManager
 from niksnaks_hosting.shared.utils.constants import is_bedrock
 
@@ -41,6 +42,9 @@ class ConnectView(Gtk.Box, LocalIpMixin, PlayersMixin, PlayitMixin):
         self._player_rows_by_group: dict[Gtk.Widget, list[Gtk.Widget]] = {}
         self._whitelist_list_rows: list[Adw.ExpanderRow] = []
         self._banned_list_rows: list[Adw.ExpanderRow] = []
+        # Bumped whenever a different server is shown, so an answer that arrives from a
+        # slow machine after the user has moved on is dropped instead of drawn.
+        self._server_files_generation = 0
 
         self._banner = Adw.Banner()
         self._banner.set_title(_("Restart the server to apply changes"))
@@ -213,6 +217,7 @@ class ConnectView(Gtk.Box, LocalIpMixin, PlayersMixin, PlayitMixin):
 
         self._server_info = server_info
         self._server_manager = server_manager
+        self._server_files_generation += 1
 
         playit = self._server_manager.playit_manager
         if self._status_handler_id is not None:
@@ -265,26 +270,56 @@ class ConnectView(Gtk.Box, LocalIpMixin, PlayersMixin, PlayitMixin):
         self._refresh_whitelist_status()
         self._refresh_player_lists()
 
-    def _server_dir(self) -> Path | None:
+    def _server_dir(self):
+        """The server's folder, on whichever machine that happens to be.
+
+        Handed back as ServerInfo built it. Rebuilding it as a Path pointed this view at
+        a folder of the same name on this computer, which for a server on another one is
+        not there -- and raised before the tab had finished loading, so selecting a
+        remote server left the whole detail view half-built.
+        """
         if not self._server_info:
             return None
-        return Path(self._server_info.server_dir)
+        return self._server_info.server_dir
 
     def _is_bedrock_server(self) -> bool:
         return bool(self._server_info and is_bedrock(self._server_info.edition))
 
-    def _refresh_whitelist_status(self):
-        enabled = False
-        if self._server_manager and self._server_info:
-            cfg = self._server_manager.get_config(self._server_info.id)
-            if cfg:
-                cfg.load()
-                enabled = cfg.get_bool(self._whitelist_property(), False)
+    def _read_whitelist_enabled(self) -> bool:
+        if not (self._server_manager and self._server_info):
+            return False
+        cfg = self._server_manager.get_config(self._server_info.id)
+        if not cfg:
+            return False
+        cfg.load()
+        return cfg.get_bool(self._whitelist_property(), False)
 
+    def _refresh_whitelist_status(self):
+        """Show whether the whitelist is on, reading it off whichever machine it is on.
+
+        For a server on another computer that is a file over SFTP, which on a machine
+        that is asleep answers with a connect timeout -- so the reading is done on a
+        thread and only the switch is set back here.
+        """
+        self._read_server_files(self._read_whitelist_enabled, self._apply_whitelist_status, False)
+
+    def _apply_whitelist_status(self, enabled: bool):
         self._suppress_whitelist_toggle = True
         for row in self._whitelist_toggle_rows:
-            row.set_active(enabled)
+            row.set_active(bool(enabled))
         self._suppress_whitelist_toggle = False
+
+    def _read_server_files(self, read, show, fallback):
+        """Read one thing out of the server's folder and show it when it arrives."""
+        info = self._server_info
+        generation = self._server_files_generation
+        read_then_show(
+            bool(info and info.is_remote),
+            read,
+            show,
+            fallback,
+            still_wanted=lambda: generation == self._server_files_generation,
+        )
 
     def _on_whitelist_toggled(self, row, _pspec):
         if self._suppress_whitelist_toggle:

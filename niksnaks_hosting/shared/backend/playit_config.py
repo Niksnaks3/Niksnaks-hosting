@@ -4,6 +4,9 @@ import json
 import os
 import threading
 from pathlib import Path
+from typing import Any
+
+from niksnaks_hosting.shared.remote.paths import is_remote
 
 DEFAULT_PLAYIT_CONFIG = {
     "secret": "",
@@ -18,9 +21,17 @@ DEFAULT_PLAYIT_CONFIG = {
     "voicechat_port": 24454,
 }
 
-def playit_config_path(server_dir: str | Path) -> Path:
-    root = Path(server_dir)
-    return root / ".niksnaks-hosting-playit.json"
+def playit_config_path(server_dir: Any) -> Path | None:
+    """Where a server's tunnel settings live, or None for a server that can have none.
+
+    The playit agent is a program this app runs here, forwarding a port on this
+    computer. A server on another machine is not reachable through it, so it has no
+    playit setup on this side -- and saying that plainly is what stops a folder name
+    from the far machine being turned into a path on this one's disk.
+    """
+    if is_remote(server_dir):
+        return None
+    return Path(server_dir) / ".niksnaks-hosting-playit.json"
 
 # The runtime poll asks for this config every second for every running server, which
 # on Windows means a disk read per server per second for a file that changes only
@@ -29,8 +40,10 @@ def playit_config_path(server_dir: str | Path) -> Path:
 _cache_lock = threading.Lock()
 _config_cache: dict[str, tuple[int, dict]] = {}
 
-def load_playit_config(server_dir: str | Path) -> dict:
+def load_playit_config(server_dir: Any) -> dict:
     path = playit_config_path(server_dir)
+    if path is None:
+        return dict(DEFAULT_PLAYIT_CONFIG)
     key = os.path.normcase(os.fspath(path))
 
     try:
@@ -78,8 +91,10 @@ def load_playit_config(server_dir: str | Path) -> dict:
         _config_cache[key] = (mtime_ns, dict(cfg))
     return cfg
 
-def save_playit_config(server_dir: str | Path, config: dict) -> bool:
+def save_playit_config(server_dir: Any, config: dict) -> bool:
     path = playit_config_path(server_dir)
+    if path is None:
+        return False
     payload = dict(DEFAULT_PLAYIT_CONFIG)
     payload.update(config or {})
     payload["secret"] = str(payload.get("secret", ""))

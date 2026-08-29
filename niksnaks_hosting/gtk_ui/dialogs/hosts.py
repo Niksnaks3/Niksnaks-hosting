@@ -48,21 +48,20 @@ def show_hosts_dialog(parent: Gtk.Window, hosts: HostsManager, manager=None) -> 
         for host in hosts.ssh_hosts():
             row = Adw.ActionRow(title=host.name, subtitle=host.credentials.label)
 
-            if host.is_connected:
-                state = _("Connected")
-            elif hosts.needs_password(host.id):
-                state = _("Needs password")
-            else:
-                state = _("Not connected")
-            status = Gtk.Label(label=state)
+            status = Gtk.Label(label=_("Connected") if host.is_connected else _("Checking…"))
             status.add_css_class("caption")
             status.add_css_class("dim-label")
             row.add_suffix(status)
 
+            unlock = None
             if hosts.needs_password(host.id):
-                # No key was ever installed, so there is nothing to reconnect with until
-                # someone types the password again.
+                # Nothing was written down to reconnect with, so a password may be the
+                # only way back in -- unless the app's own key turns out to be on the
+                # machine already, which is what the probe below finds out. Built now
+                # and shown only if the probe fails, rather than nagging for a password
+                # in front of a host that is working.
                 unlock = Gtk.Button(label=_("Password…"), valign=Gtk.Align.CENTER)
+                unlock.set_visible(False)
                 unlock.connect(
                     "clicked",
                     lambda _b, h=host: ask_host_password(
@@ -70,6 +69,8 @@ def show_hosts_dialog(parent: Gtk.Window, hosts: HostsManager, manager=None) -> 
                     ),
                 )
                 row.add_suffix(unlock)
+
+            _probe_host(host, status, unlock)
 
             if manager is not None:
                 # The whole point of the far machine having this app installed too: its
@@ -248,6 +249,33 @@ def _show_adopt(parent, manager, host) -> None:
     from niksnaks_hosting.gtk_ui.dialogs.adopt_servers import show_adopt_dialog
 
     show_adopt_dialog(parent, manager, host)
+
+
+def _probe_host(host, status_label: Gtk.Label, unlock: Gtk.Button | None) -> None:
+    """Say whether this machine can be reached, rather than guessing from the saved file.
+
+    Only the login is tried, not check_ready(): opening a dialog must not be able to
+    change anything on the far machine, and "can it be reached at all" is the question
+    the row is there to answer. The Test button next to it still asks the fuller one.
+    """
+
+    def worker() -> None:
+        try:
+            host.connect()
+            ok, detail = True, ""
+        except Exception as e:
+            ok, detail = False, str(e)
+
+        def finish() -> bool:
+            status_label.set_label(_("Connected") if ok else _("Not connected"))
+            status_label.set_tooltip_text(detail or None)
+            if unlock is not None:
+                unlock.set_visible(not ok)
+            return False
+
+        GLib.idle_add(finish)
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 def _test_host(parent, host, status_label: Gtk.Label) -> None:
