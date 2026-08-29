@@ -503,13 +503,20 @@ class CreateServerDialog(Adw.Dialog):
             return
 
         if self._raw_selected_host_id() == ADD_HOST_SENTINEL:
-            # Put the picker back first, so backing out of the detour leaves no trace.
-            self._refresh_host_row(select_id=self._last_host_id)
-            self._open_add_host_page()
+            # Replacing a combo row's model from inside its own notify::selected frees
+            # the list it is still emitting from, which segfaults GTK. Hand the work to
+            # the main loop so the emission has finished by the time it runs.
+            GLib.idle_add(self._enter_add_host_page)
             return
 
         self._last_host_id = self._selected_host_id()
         self._apply_host_rules()
+
+    def _enter_add_host_page(self) -> bool:
+        # Put the picker back first, so backing out of the detour leaves no trace.
+        self._refresh_host_row(select_id=self._last_host_id)
+        self._open_add_host_page()
+        return False
 
     def _apply_host_rules(self) -> None:
         host_id = self._selected_host_id()
@@ -546,23 +553,6 @@ class CreateServerDialog(Adw.Dialog):
         return False, _("{} is a {} machine, and Bedrock is only published for 64-bit Intel and AMD").format(
             host.name, arch
         )
-
-    def _remote_platform(self) -> str:
-        """The platform of the host a new server would go on. Empty for this computer.
-
-        A remote host whose platform has never been detected is NOT the same thing as
-        no host at all -- callers such as the Bedrock build picker treat "" as "use
-        this machine's own OS", so returning it here for an undetected remote host
-        would hand a Linux desktop's Windows target the Linux zip. Connecting is the
-        only way to find out for sure; _remote_platform_blocking below does that off
-        the main thread for callers that can afford to wait on it.
-        """
-        host_id = self._selected_host_id()
-        if not host_id:
-            return ""
-        from niksnaks_hosting.shared.remote.hosts_manager import get_hosts_manager
-
-        return get_hosts_manager().platform_of(host_id)
 
     @staticmethod
     def _remote_platform_blocking(host_id: str) -> str:
@@ -1534,6 +1524,7 @@ class CreateServerDialog(Adw.Dialog):
         same reason the remote Java path leaves them out -- both read files from this
         computer, and putting them on the host is a separate job from creating it.
         """
+        from niksnaks_hosting.shared.backend.config_manager import ConfigManager
         from niksnaks_hosting.shared.remote.hosts_manager import get_hosts_manager
         from niksnaks_hosting.shared.remote.remote_install import install_remote_bedrock
 

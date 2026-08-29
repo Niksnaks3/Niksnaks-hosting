@@ -22,15 +22,6 @@ from ..utils import *
 _SSL_CONTEXT = make_ssl_context()
 
 class PlayersMixin:
-    def _push_players_page(self, *_args) -> None:
-        show_fullscreen = self._push_fullscreen_page_cb is not None
-        page = Adw.NavigationPage(title=_("Players"), child=self._build_players_page(show_controls=show_fullscreen))
-
-        if show_fullscreen:
-            self._push_fullscreen_page_cb(page)
-        else:
-            self._nav.push(page)
-
     def _build_players_page(self, show_controls: bool = False) -> Gtk.Widget:
         page = Adw.PreferencesPage()
 
@@ -259,7 +250,7 @@ class PlayersMixin:
         threading.Thread(target=worker, daemon=True).start()
 
     def _remove_whitelist_player(self, name: str) -> None:
-        whitelist_path, _ = self._player_list_paths()
+        whitelist_path, _banned_path = self._player_list_paths()
         if not whitelist_path:
             return
 
@@ -276,7 +267,7 @@ class PlayersMixin:
             self._toast(_("Removed {} from whitelist").format(name))
 
     def _remove_banned_player(self, name: str) -> None:
-        _, banned_path = self._player_list_paths()
+        _whitelist_path, banned_path = self._player_list_paths()
         if not banned_path:
             return
 

@@ -361,7 +361,7 @@ class PlayersMixin:
         threading.Thread(target=worker, daemon=True).start()
 
     def _remove_whitelist_player(self, name: str):
-        whitelist_path, _ = self._player_list_paths()
+        whitelist_path, _banned_path = self._player_list_paths()
         if not whitelist_path:
             return
 
@@ -403,7 +403,7 @@ class PlayersMixin:
             )
 
     def _remove_banned_player(self, name: str):
-        _, banned_path = self._player_list_paths()
+        _whitelist_path, banned_path = self._player_list_paths()
         if not banned_path:
             return
 

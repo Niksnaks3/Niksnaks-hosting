@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ipaddress
 import json
 import os
 import platform
@@ -209,10 +208,6 @@ class PlayitManager(EventEmitter):
     def get_endpoint_for(self, server_id: str) -> str:
         info = self._active_server_ids.get(server_id)
         return info.get("endpoint", "") if info else ""
-
-    @property
-    def claim_url(self) -> str:
-        return self._claim_url
 
     @property
     def server_id(self) -> str | None:
@@ -424,11 +419,6 @@ class PlayitManager(EventEmitter):
             pass
 
         return 0, 17, 1
-
-    def _is_incompatible_version(self, binary: str) -> bool:
-        major, minor, patch = self._detect_version(binary)
-        is_incompatible = major >= 1
-        return is_incompatible
 
     def _download_specific_version(self, version_tag: str) -> tuple[bool, str]:
         try:
@@ -731,19 +721,6 @@ class PlayitManager(EventEmitter):
         out.extend(self.tunnels["both"])
         return out
 
-    def _tunnel_exists_for_endpoint(self, endpoint: str) -> bool:
-        ep = endpoint.strip().lower()
-        if not ep:
-            return False
-        for tunnel in self._return_single_list():
-            if tunnel.hostname and tunnel.hostname.strip().lower() == ep:
-                return True
-            if tunnel.domain and tunnel.remote_port:
-                candidate = f"{tunnel.domain}:{tunnel.remote_port}"
-                if candidate.lower() == ep:
-                    return True
-        return False
-
     def _check_tunnel_limit(self) -> bool:
         total = len(self.tunnels["tcp"]) + len(self.tunnels["udp"]) + len(self.tunnels["both"])
         return total < self.max_tunnels
@@ -826,7 +803,7 @@ class PlayitManager(EventEmitter):
 
             self.tunnel_cache.add_tunnel(tunnel_id, tunnel_data)
 
-            for _ in range(15):
+            for _attempt in range(15):
                 self._retrieve_tunnels()
                 for tunnel in self.tunnels.get(protocol, []):
                     if tunnel.status != "pending" and tunnel.id == tunnel_id:
@@ -1001,58 +978,6 @@ class PlayitManager(EventEmitter):
         self._watch_thread.start()
 
         return True, _("playit started")
-
-    def regenerate_domain(
-        self,
-        server_id: str,
-        server_dir: str,
-        secret: str = "",
-        auto_install: bool = False,
-    ) -> tuple[bool, str]:
-
-        if self.is_running:
-            was_running_for_this = server_id in self._active_server_ids
-            if was_running_for_this:
-                self._active_server_ids.pop(server_id, None)
-
-            port = self._read_server_port(server_dir)
-            protocol = "tcp"
-            self._retrieve_tunnels()
-            candidates = [tunnel for tunnel in list(self.tunnels.get(protocol, [])) if tunnel.port == int(port)]
-
-            deleted_any = False
-            for tunnel in candidates:
-                if self._delete_tunnel(tunnel):
-                    deleted_any = True
-
-            try:
-                tunnel = self.get_tunnel(port, protocol=protocol, ensure=True, label=server_id)
-            except Exception as e:
-                return False, str(e)
-
-            if not tunnel:
-                return False, _("failed to allocate a new playit tunnel")
-
-            tunnel.in_use = True
-            self._active_server_ids[server_id] = {
-                "tunnel_id": tunnel.id,
-                "endpoint": tunnel.hostname or "",
-                "port": port,
-            }
-            if tunnel.hostname:
-                self._emit_endpoint_changed(server_id)
-
-            if deleted_any:
-                return True, _("playit tunnel domain regenerated")
-            return True, _("playit tunnel created for this server")
-
-        return self.start(
-            server_id,
-            server_dir,
-            secret=secret,
-            auto_install=auto_install,
-            allow_unclaimed=False,
-        )
 
     def _ensure_api_ready(self, secret: str = "", auto_install: bool = False) -> tuple[bool, str]:
         binary = self.resolve_binary()
@@ -1709,82 +1634,6 @@ class PlayitManager(EventEmitter):
             )
         return result
 
-    def auto_create_tunnel_mods(
-        self,
-        server_id: str,
-        server_dir: str,
-        secret: str = "",
-        bedrock_port: int = 19132,
-        voicechat_port: int = 24454,
-    ) -> dict[str, str]:
-
-        from niksnaks_hosting.shared.backend.playit_config import load_playit_config, save_playit_config
-
-        result = {"bedrock_endpoint": "", "voicechat_endpoint": ""}
-        cfg = load_playit_config(server_dir)
-        mods_dir = Path(server_dir) / "mods"
-        dirty = False
-
-        self._retrieve_tunnels()
-
-        bedrock_ep = str(cfg.get("bedrock_endpoint", "")).strip()
-        if bedrock_ep and not self._tunnel_exists_for_endpoint(bedrock_ep):
-            cfg["bedrock_endpoint"] = ""
-            bedrock_ep = ""
-            dirty = True
-
-        if not bedrock_ep:
-            has_geyser = False
-            try:
-                has_geyser = any("geyser" in jar.stem.lower() for jar in mods_dir.glob("*.jar"))
-            except Exception:
-                pass
-            if has_geyser:
-                ok, _msg, endpoint = self.add_bedrock_tunnel(
-                    server_id,
-                    server_dir,
-                    secret=secret,
-                    auto_install=True,
-                    bedrock_port=bedrock_port,
-                )
-                if ok and endpoint:
-                    cfg["bedrock_endpoint"] = endpoint
-                    result["bedrock_endpoint"] = endpoint
-                    dirty = True
-
-        vc_ep = str(cfg.get("voicechat_endpoint", "")).strip()
-        if vc_ep and not self._tunnel_exists_for_endpoint(vc_ep):
-            cfg["voicechat_endpoint"] = ""
-            vc_ep = ""
-            dirty = True
-
-        if not vc_ep:
-            has_vc = False
-            try:
-                has_vc = any(
-                    "voice-chat" in jar.stem.lower() or "simple-voice-chat" in jar.stem.lower()
-                    for jar in mods_dir.glob("*.jar")
-                )
-            except Exception:
-                pass
-            if has_vc:
-                ok, _msg, endpoint = self.add_voicechat_tunnel(
-                    server_id,
-                    server_dir,
-                    secret=secret,
-                    auto_install=True,
-                    voicechat_port=voicechat_port,
-                )
-                if ok and endpoint:
-                    cfg["voicechat_endpoint"] = endpoint
-                    result["voicechat_endpoint"] = endpoint
-                    dirty = True
-
-        if dirty:
-            save_playit_config(server_dir, cfg)
-
-        return result
-
     def stop_server(self, server_id: str) -> tuple[bool, str]:
         if server_id not in self._active_server_ids:
             return True, _("playit is not running for this server")
@@ -1910,48 +1759,6 @@ class PlayitManager(EventEmitter):
                     self._active_server_ids[server_id]["endpoint"] = candidate
                     self._emit_endpoint_changed(server_id)
                     break
-
-    def _pick_best_endpoint(self, candidates: list[str]) -> str:
-        best = ""
-        best_score = -1
-        for endpoint in candidates:
-            score = self._endpoint_score(endpoint)
-            if score > best_score:
-                best = endpoint
-                best_score = score
-        return best
-
-    def _endpoint_score(self, endpoint: str) -> int:
-        if not endpoint or ":" not in endpoint:
-            return -1
-
-        host = endpoint.rsplit(":", 1)[0].strip().lower()
-        if not host:
-            return -1
-
-        if self._is_private_or_loopback_ipv4(host):
-            return -1
-        if host.endswith("joinmc.link"):
-            return 100
-        if any(c.isalpha() for c in host):
-            return 80
-        if self._is_ipv4(host):
-            return 40
-        return 10
-
-    def _is_ipv4(self, value: str) -> bool:
-        try:
-            ipaddress.IPv4Address(value)
-            return True
-        except Exception:
-            return False
-
-    def _is_private_or_loopback_ipv4(self, value: str) -> bool:
-        try:
-            ip = ipaddress.IPv4Address(value)
-            return bool(ip.is_private or ip.is_loopback or ip.is_link_local)
-        except Exception:
-            return False
 
     def _watch_exit(self):
         p = self._process
