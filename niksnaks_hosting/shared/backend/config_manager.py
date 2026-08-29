@@ -90,11 +90,6 @@ class ConfigManager:
         else:
             self._properties[key] = str(value)
 
-    def get_all(self) -> dict[str, str]:
-        if not self._loaded:
-            self.load()
-        return dict(self._properties)
-
     def set_eula(self, accepted: bool = True):
         eula_path = self.server_dir / "eula.txt"
         self.server_dir.mkdir(parents=True, exist_ok=True)

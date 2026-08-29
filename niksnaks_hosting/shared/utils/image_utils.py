@@ -17,12 +17,6 @@ except ImportError:
     Gdk = None
     Gtk = None
 
-def crop_to_square(input_path: str, x: int, y: int, size: int) -> Image.Image:
-    img = Image.open(input_path)
-    img = img.convert("RGBA")
-    cropped = img.crop((x, y, x + size, y + size))
-    return cropped
-
 def convert_to_png(input_path: str, output_path: str, size: int = 128, crop_box: tuple = None) -> str:
     img = Image.open(input_path)
     img = img.convert("RGBA")
@@ -63,22 +57,3 @@ def load_pixbuf(path: str, size: int = 128) -> GdkPixbuf.Pixbuf | None:
     except Exception:
         return None
 
-def create_texture_from_file(path: str, size: int = 128) -> Gdk.Texture | None:
-    if Gdk is None:
-        return None
-    try:
-        pixbuf = load_pixbuf(path, size)
-        if pixbuf:
-            return Gdk.Texture.new_for_pixbuf(pixbuf)
-    except Exception:
-        pass
-    return None
-
-def get_default_server_icon_pixbuf(size: int = 48) -> GdkPixbuf.Pixbuf | None:
-    if GdkPixbuf is None:
-        return None
-
-    pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, True, 8, size, size)
-
-    pixbuf.fill(0x7C6BF0FF)
-    return pixbuf

@@ -208,10 +208,6 @@ class HostsManager(EventEmitter):
         for host in list(self._hosts.values()):
             host.close()
 
-    def describe(self, host_id: str | None) -> str:
-        host = self.get(host_id)
-        return host.name if host else _("Unknown host")
-
     def status(self, host_id: str) -> dict[str, Any]:
         host = self._hosts.get(str(host_id))
         if not host:

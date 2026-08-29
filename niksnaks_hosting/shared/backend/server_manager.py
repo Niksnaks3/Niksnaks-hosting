@@ -353,12 +353,6 @@ class ServerManager(EventEmitter):
         self._save()
         self.emit_on_main_thread("server-changed", server_id)
 
-    def get_autostart_server(self) -> ServerInfo | None:
-        for server in self._servers.values():
-            if server.autostart:
-                return server
-        return None
-
     def get_autostart_servers(self) -> list[ServerInfo]:
         return [server for server in self._servers.values() if server.autostart]
 
@@ -434,9 +428,6 @@ class ServerManager(EventEmitter):
                 loader_libs = root.joinpath(*library_path)
                 if loader_libs.is_dir():
                     shutil.rmtree(loader_libs, ignore_errors=True)
-
-    def update_server_version(self, server_id: str, mc_version: str) -> tuple[bool, str]:
-        return self.update_server_runtime(server_id, mc_version, None)
 
     def update_server_runtime(
         self,
@@ -1513,12 +1504,6 @@ class ServerManager(EventEmitter):
     def get_running_server_ids(self) -> list[str]:
         return [sid for sid, p in self._processes.items() if p.is_running]
 
-    def get_running_server_id(self) -> str | None:
-        for server_id, process in self._processes.items():
-            if process.is_running:
-                return server_id
-        return None
-
     def server_bound_ports(self, info: ServerInfo) -> set[int]:
         """The ports *info* claims once it starts, read from its own server.properties."""
         default = default_port_for_edition(info.edition)
@@ -1542,9 +1527,6 @@ class ServerManager(EventEmitter):
                 owners.setdefault(port, info.name)
         return owners
 
-    def get_used_ports(self, exclude_server_id: str = "") -> set[int]:
-        return set(self.ports_in_use(exclude_server_id))
-
     def find_port_conflict(
         self, port: int, edition: str = EDITION_JAVA, exclude_server_id: str = ""
     ) -> str | None:
@@ -1554,44 +1536,6 @@ class ServerManager(EventEmitter):
             if candidate in owners:
                 return owners[candidate]
         return None
-
-    def get_used_bedrock_ports(self) -> set[int]:
-        ports: set[int] = set()
-        for sid, info in self._servers.items():
-            try:
-                cfg = load_playit_config(info.server_dir)
-                port = int(cfg.get("bedrock_port", 19132))
-                if 1024 <= port <= 65535:
-                    ports.add(port)
-            except Exception:
-                pass
-        return ports
-
-    def get_used_voicechat_ports(self) -> set[int]:
-        ports: set[int] = set()
-        for sid, info in self._servers.items():
-            try:
-                cfg = load_playit_config(info.server_dir)
-                port = int(cfg.get("voicechat_port", 24454))
-                if 1024 <= port <= 65535:
-                    ports.add(port)
-            except Exception:
-                pass
-        return ports
-
-    def get_next_available_bedrock_port(self) -> int:
-        used = self.get_used_bedrock_ports()
-        port = 19132
-        while port in used:
-            port += 1
-        return port
-
-    def get_next_available_voicechat_port(self) -> int:
-        used = self.get_used_voicechat_ports()
-        port = 24454
-        while port in used:
-            port += 1
-        return port
 
     def get_next_available_port(self, edition: str = EDITION_JAVA, exclude_server_id: str = "") -> int:
         """The first port from this edition's default upwards that no server has claimed.
@@ -1705,9 +1649,6 @@ class ServerManager(EventEmitter):
             if self.get_voicechat_port(sid) == port:
                 return port
         return None
-
-    def resolve_playit_port_conflicts(self, server_id: str) -> None:
-        pass
 
     def has_bedrock_tunnel(self, server_id: str) -> bool:
         info = self._servers.get(server_id)
@@ -1934,20 +1875,6 @@ class ServerManager(EventEmitter):
                 return found
 
         return self._pick_world_dir(server_root, level_name, "world")
-
-    def _unique_world_destination(self, server_root: Path, name: str) -> Path:
-        safe_name = Path(name).name.strip() or "world"
-        candidate = server_root / safe_name
-        if not candidate.exists():
-            return candidate
-
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        candidate = server_root / f"{safe_name}-{stamp}"
-        suffix = 2
-        while candidate.exists():
-            candidate = server_root / f"{safe_name}-{stamp}-{suffix}"
-            suffix += 1
-        return candidate
 
     def create_world_folder(self, server_id: str, name: str, seed: str = "", level_type: str = "") -> tuple[bool, str]:
         info = self.get_server(server_id)

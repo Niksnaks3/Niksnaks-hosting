@@ -371,9 +371,6 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
                 toast.connect("button-clicked", lambda *_args: on_button())
         self._toast_overlay.add_toast(toast)
 
-    def pause_playit_auto_start_for_running_server(self, server_id: str):
-        self._playit_autostart_paused_ids.add(server_id)
-
     def clear_playit_auto_start_pause(self, server_id: str):
         self._playit_autostart_paused_ids.discard(server_id)
 

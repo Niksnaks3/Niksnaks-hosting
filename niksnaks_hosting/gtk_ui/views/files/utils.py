@@ -24,7 +24,6 @@ __all__ = [
     "_open_path",
     "_world_dirs",
     "_world_dimension_dirs",
-    "_is_relative_to",
     "_format_size",
     "_format_mtime",
     "_format_compact_count",
@@ -179,13 +178,6 @@ def _world_dimension_dirs(world_dir: Path) -> list[tuple[str, Path]]:
         unique.append((label, path))
 
     return unique
-
-def _is_relative_to(path: Path, parent: Path) -> bool:
-    try:
-        path.relative_to(parent)
-        return True
-    except ValueError:
-        return False
 
 def _format_size(size: int) -> str:
     units = ["B", "KB", "MB", "GB"]

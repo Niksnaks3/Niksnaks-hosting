@@ -277,24 +277,6 @@ def list_categories() -> list[tuple[str, int]]:
     return sorted(out, key=lambda item: item[0].lower())
 
 
-def get_mod(mod_id: int | str) -> dict[str, Any] | None:
-    try:
-        data = _request_json(f"/mods/{int(mod_id)}")
-    except Exception:
-        return None
-    payload = data.get("data")
-    return payload if isinstance(payload, dict) else None
-
-
-def get_mod_description(mod_id: int | str) -> str:
-    """The project's long description, as HTML."""
-    try:
-        data = _request_json(f"/mods/{int(mod_id)}/description")
-    except Exception:
-        return ""
-    return str(data.get("data") or "")
-
-
 def get_files(
     mod_id: int | str,
     game_version: str = "",

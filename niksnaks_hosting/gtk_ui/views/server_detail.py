@@ -401,22 +401,6 @@ class ServerDetailView(Gtk.Box):
                     )
             self._selected_process.start()
 
-    def get_console_view(self, server_id: str | None = None) -> ConsoleView | None:
-        if server_id and server_id in self._console_views:
-            return self._console_views[server_id]
-        if self._current_server:
-            return self._ensure_console_view(self._current_server.id)
-        return next(iter(self._console_views.values())) if self._console_views else None
-
-    def get_perf_view(self) -> PerformanceView:
-        return self._ensure_perf_view()
-
-    def get_props_view(self) -> PropertiesView:
-        return self._ensure_props_view()
-
-    def get_files_view(self) -> FilesView:
-        return self._ensure_files_view()
-
     @property
     def header(self) -> Adw.HeaderBar:
         return self._header

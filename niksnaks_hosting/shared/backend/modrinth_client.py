@@ -378,12 +378,6 @@ def find_compatible_version(
     versions = find_compatible_versions(project_id, game_version, loader=loader, limit=1)
     return versions[0] if versions else None
 
-def find_compatible_version_file(project_id: str, game_version: str, loader: str = "fabric") -> tuple[str, str] | None:
-    chosen = find_compatible_version(project_id, game_version, loader=loader)
-    if not chosen:
-        return None
-    return (chosen.download_url, chosen.filename)
-
 def download_to(
     url: str,
     dest: Path,

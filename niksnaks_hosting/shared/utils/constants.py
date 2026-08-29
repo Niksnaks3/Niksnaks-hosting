@@ -177,9 +177,6 @@ def get_bedrock_download_types_for(platform: str) -> tuple[str, str]:
     key = "win32" if platform == "windows" else "linux"
     return BEDROCK_DOWNLOAD_TYPES[key]
 
-def get_bedrock_binary_for(platform: str) -> str:
-    return "bedrock_server.exe" if platform == "windows" else "bedrock_server"
-
 ADOPTIUM_API_BASE = "https://api.adoptium.net/v3/binary/latest"
 
 ADOPTIUM_ARCH_MAP = {
@@ -225,9 +222,6 @@ def get_adoptium_jre_download_info(java_version: int) -> tuple[str, str]:
 
     url = f"{ADOPTIUM_API_BASE}/{java_version}/ga/{os_name}/{arch}/{image_type}/hotspot/normal/eclipse"
     return url, archive_type
-
-def get_adoptium_jre_url(java_version: int) -> str:
-    return get_adoptium_jre_download_info(java_version)[0]
 
 DEFAULT_JAVA_VERSION = 21
 

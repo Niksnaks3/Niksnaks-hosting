@@ -14,14 +14,12 @@ from niksnaks_hosting.shared.utils.constants import (
     FABRIC_LOADER_VERSIONS_URL,
     FORGE_PROMOTIONS_URL,
     FORGE_VERSIONS_URL,
-    LOADER_FABRIC,
     LOADER_FORGE,
     LOADER_NEOFORGE,
     NEOFORGE_LEGACY_VERSIONS_URL,
     NEOFORGE_VERSIONS_URL,
     TEMP_DIR,
     get_fabric_loader_versions_url,
-    get_forge_full_version,
     get_forge_installer_url,
     get_loader_display_name,
     get_neoforge_installer_url,
@@ -362,16 +360,6 @@ class DownloadManager:
         except Exception as e:
             return False, _("Installation error: {}").format(e)
 
-    def fetch_all_versions_async(self, callback: Callable[[list[str], list[str]], None]):
-        def _fetch():
-            games = self.fetch_game_versions()
-            loaders = self.fetch_loader_versions()
-            callback(games, loaders)
-
-        thread = threading.Thread(target=_fetch, daemon=True)
-        thread.start()
-        return thread
-
     def _fetch_forge_metadata(self) -> dict[str, list[str]]:
         if self._forge_metadata is not None:
             return self._forge_metadata
@@ -456,10 +444,6 @@ class DownloadManager:
             return None
         stable = next((v for v in versions if not is_neoforge_beta(v)), None)
         return stable or versions[0]
-
-    def get_neoforge_latest_version(self, mc_version: str) -> str | None:
-        versions = self.fetch_neoforge_versions(mc_version)
-        return versions[0] if versions else None
 
     def download_neoforge_installer(
         self,
@@ -559,14 +543,6 @@ class DownloadManager:
         thread = threading.Thread(target=_fetch, daemon=True)
         thread.start()
         return thread
-
-    def get_forge_latest_build(self, mc_version: str) -> str | None:
-        promos = self._fetch_forge_promotions()
-        build = promos.get(f"{mc_version}-latest") or promos.get(f"{mc_version}-recommended")
-        if build:
-            return build
-        builds = self.fetch_forge_builds(mc_version)
-        return builds[0] if builds else None
 
     def download_forge_installer(
         self,

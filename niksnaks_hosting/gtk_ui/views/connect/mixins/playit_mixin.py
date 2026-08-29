@@ -545,9 +545,6 @@ class PlayitMixin:
         dialog.connect("response", on_response)
         dialog.present(self.get_root())
 
-    def _on_regenerate_domain(self, *_args):
-        self._on_manage_java_tunnel()
-
     def _on_manage_java_tunnel(self, *_args):
         if not self._server_manager or not self._server_info:
             return
