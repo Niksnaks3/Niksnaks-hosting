@@ -350,11 +350,23 @@ class NiksnaksHostingApplication(Adw.Application):
 
         from niksnaks_hosting.gtk_ui.dialogs.icon_picker import IconPickerDialog
 
-        dialog = IconPickerDialog(server_id, str(server_info.server_dir))
+        dialog = IconPickerDialog(server_id)
 
         def on_icon_selected(d, icon_path):
-            self._server_manager.set_server_icon(server_id, icon_path)
-            self._window.show_toast(_("Server icon updated"))
+            # For a server on another computer this is an upload, so it happens off the
+            # main thread; the row picks the new picture up from server-changed.
+            def worker() -> None:
+                ok, detail = self._server_manager.set_server_icon(server_id, icon_path)
+
+                def finish() -> bool:
+                    self._window.show_toast(
+                        _("Server icon updated") if ok else detail or _("Could not save the picture")
+                    )
+                    return False
+
+                GLib.idle_add(finish)
+
+            threading.Thread(target=worker, daemon=True).start()
 
         dialog.connect("icon-selected", on_icon_selected)
         dialog.present(self._window)

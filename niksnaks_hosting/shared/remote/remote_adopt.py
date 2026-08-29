@@ -16,6 +16,8 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from niksnaks_hosting.shared.utils.constants import APP_ID
+
 if TYPE_CHECKING:
     from niksnaks_hosting.shared.backend.server_manager import ServerManager
     from niksnaks_hosting.shared.remote.host import SshHost
@@ -26,8 +28,18 @@ CONFIG_NAME = "servers.json"
 # user's home. NIKSNAKS_HOSTING_DATA_DIR cannot be consulted: an environment variable set
 # for the desktop session is not visible to a non-interactive SSH session, so a host that
 # uses one has to be pointed at the folder by hand.
+#
+# The Flatpak comes first because it is how this app is normally installed on Linux, and
+# it is the one case where the app's own home directory is not the login user's: Flatpak
+# redirects HOME into ~/.var/app/<id>, so the folder XDG puts the data in is nowhere near
+# where an SSH session looking at ~/.local/share would find it.
 DATA_DIR_CANDIDATES = {
-    "posix": (".local/share/niksnaks-hosting",),
+    "posix": (
+        f".var/app/{APP_ID}/data/niksnaks-hosting",
+        ".local/share/niksnaks-hosting",
+        # A Mac reports itself as POSIX here, and keeps its data somewhere else again.
+        "Library/Application Support/Niksnaks-Hosting",
+    ),
     "windows": ("AppData/Local/Niksnaks-Hosting",),
 }
 
@@ -83,6 +95,11 @@ def discover_remote_servers(
     """
     candidates = [data_dir] if data_dir else remote_data_dirs(host)
 
+    # A machine can have more than one of these -- a Flatpak tried once and a native
+    # install kept, say -- and the one that matters is the one with servers in it. The
+    # first that could be read is remembered so "installed but managing nothing" is
+    # still told apart from "not installed at all".
+    empty_folder = ""
     for folder in candidates:
         config = host.path(f"{folder}/{CONFIG_NAME}")
         try:
@@ -93,6 +110,10 @@ def discover_remote_servers(
             continue
 
         entries = data.get("servers", []) if isinstance(data, dict) else []
+        if not entries:
+            empty_folder = empty_folder or folder
+            continue
+
         candidates_out: list[RemoteServerCandidate] = []
         for raw in entries:
             if not isinstance(raw, dict):
@@ -113,7 +134,7 @@ def discover_remote_servers(
                 candidates_out.append(bad)
         return candidates_out, folder
 
-    return [], ""
+    return [], empty_folder
 
 
 def _classify(manager: ServerManager, host: SshHost, raw: dict[str, Any]) -> RemoteServerCandidate:

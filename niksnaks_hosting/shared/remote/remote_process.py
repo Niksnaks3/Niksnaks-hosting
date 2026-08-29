@@ -24,6 +24,14 @@ if TYPE_CHECKING:
 # stream, so this only has to notice a server that died without saying anything.
 STATE_POLL_SECONDS = 5.0
 
+# How often a server we are stopping but did not start is asked whether it has gone.
+# Each round is an SSH round trip, so this is slower than the local equivalent.
+FOREIGN_STOP_POLL_SECONDS = 2.0
+
+# How much of an existing console.log to replay when picking up a server that was
+# already running. A server up for a week has a log nobody wants shown in full.
+ADOPT_TAIL_LINES = 500
+
 
 class RemoteServerProcess(ServerProcess):
     """A server running on another machine, presented exactly like a local one.
@@ -73,6 +81,11 @@ class RemoteServerProcess(ServerProcess):
         self._console_thread: threading.Thread | None = None
         self._watch_thread: threading.Thread | None = None
         self._stopping = threading.Event()
+        # Adoption is asked for from more than one thread -- once when the process is
+        # first built, and again by every state sweep while it still looks stopped --
+        # and each round is slow enough over SSH that the next can start before it has
+        # finished. Two that got through would leave two console readers on one server.
+        self._adopt_lock = threading.Lock()
         self._last_heartbeat = 0.0
         # Set when the running process was found rather than started by this class --
         # it did not come from our unit/task, so its liveness has to be polled by
@@ -105,6 +118,13 @@ class RemoteServerProcess(ServerProcess):
     def process(self):
         # There is no local process object; nothing may assume otherwise.
         return None
+
+    @property
+    def command_echoes_back(self) -> bool:
+        # Only for a server something else started: that is the case where the command
+        # goes through the folder's inbox and the app on the far side types it in and
+        # says so in the console log this one is reading.
+        return self._foreign
 
     # -------------------------------------------------------------------- launch
     def _build_command(self) -> tuple[list[str], str]:
@@ -144,16 +164,33 @@ class RemoteServerProcess(ServerProcess):
         )
 
     def start(self) -> bool:
+        """Ask the host to start the server. Everything after saying so is off-thread.
+
+        Starting a server over SSH is half a dozen round trips -- reading the loader's
+        args file, looking for a process already in the folder, writing the unit,
+        starting it -- and this is called straight off a button press. Doing any of it
+        here would freeze the window until the far machine answered, which for one that
+        has just gone to sleep is the better part of a minute.
+        """
         if self.is_running:
             return False
 
+        self._foreign = False
+        self.status = ServerStatus.STARTING
+        self.player_count = 0
+        self._emit_players_changed()
+        threading.Thread(target=self._start_on_host, daemon=True).start()
+        return True
+
+    def _start_on_host(self) -> None:
         command, start_message = self._build_command()
         if not command:
             if self.java_path or self.is_bedrock:
                 self._emit_output("[Niksnaks-Hosting] Error: could not work out how to start this server\n")
             else:
                 self._emit_output("[Niksnaks-Hosting] Error: No suitable Java runtime found\n")
-            return False
+            self.status = ServerStatus.STOPPED
+            return
 
         # Two JVMs on one world directory corrupt it, and the far machine may well have
         # its own copy of this app pointed at the same folder. The service manager only
@@ -170,7 +207,11 @@ class RemoteServerProcess(ServerProcess):
                 "Attaching to it instead of starting a second copy.\n"
             )
             self.adopt_running_state(pid=foreign)
-            return False
+            if self._status == ServerStatus.STARTING:
+                # Adoption did not take -- a state sweep had it -- so the row must not
+                # be left claiming this app is starting something it is not.
+                self.status = ServerStatus.STOPPED
+            return
 
         # Nothing is running, but another install of this app may still be looking after
         # this folder and about to start it. Said rather than refused: the marker is
@@ -182,10 +223,6 @@ class RemoteServerProcess(ServerProcess):
                 "Starting it in two places at once would damage the world.\n"
             )
 
-        self._foreign = False
-        self.status = ServerStatus.STARTING
-        self.player_count = 0
-        self._emit_players_changed()
         self._emit_output(start_message)
         self._emit_output(f"[Niksnaks-Hosting] Command: {' '.join(command)}\n")
 
@@ -200,7 +237,7 @@ class RemoteServerProcess(ServerProcess):
         except Exception as e:
             self._emit_output(f"[Niksnaks-Hosting] Failed to start server: {e}\n")
             self.status = ServerStatus.STOPPED
-            return False
+            return
 
         self._stopping.clear()
         # Ask once up front rather than leaving the pid blank until the first poll:
@@ -212,25 +249,15 @@ class RemoteServerProcess(ServerProcess):
         self._claim_ownership()
         self._start_console_reader()
         self._start_state_watch()
-        return True
-
-    # A process this app did not start is not behind our unit or task, so every one of
-    # these would be addressed to the wrong thing: systemctl would stop a unit that was
-    # never loaded and report success, and _finish_stopped would then grey the server
-    # out while the JVM carried on holding the world open. Force stop is the exception --
-    # a pid can be killed whoever started it -- so that one stays available.
-    _FOREIGN_REFUSAL = (
-        "[Niksnaks-Hosting] This server was started by something else on {host}, so this "
-        "app cannot reach its console. Stop it where it was started, or use Force stop.\n"
-    )
 
     def stop(self) -> None:
         if not self.is_running:
             return
-        if self._foreign:
-            self._emit_output(self._FOREIGN_REFUSAL.format(host=self.host.name))
-            return
         self.status = ServerStatus.STOPPING
+
+        if self._foreign:
+            threading.Thread(target=self._stop_foreign, daemon=True).start()
+            return
 
         def worker() -> None:
             try:
@@ -243,6 +270,63 @@ class RemoteServerProcess(ServerProcess):
                 self._finish_stopped()
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _stop_foreign(self, timeout: float = STOP_GRACE_SECONDS) -> bool:
+        """Stop a server on the host that something else started.
+
+        There is no unit of ours to ask -- systemctl would stop a unit that was never
+        loaded and cheerfully report success while the JVM carried on holding the world
+        open. What there is, is the folder: the server is reading its console from an
+        inbox in it, whether a unit written from a third machine is feeding that inbox
+        straight down its stdin or the far machine's own copy of this app is watching
+        the file. So "stop" goes there, and the pid says when it worked.
+        """
+        pid = int(self._pid or 0)
+
+        if not self._console_reaches_server():
+            self._emit_output(
+                f"[Niksnaks-Hosting] Nothing on {self.host.name} is listening to this "
+                "server's console, so a stop sent from here would not arrive. It was "
+                "started by something that does not read the server folder -- an older "
+                "Niksnaks-Hosting, or a script. Stop it over there, update the copy of "
+                "this app on that computer, or use Force stop.\n"
+            )
+            self.status = ServerStatus.RUNNING
+            return False
+
+        self._emit_output("[Niksnaks-Hosting] Sending stop command...\n")
+        try:
+            if not self.is_bedrock:
+                self.service.send_console_file("save-all flush")
+            self.service.send_console_file("stop")
+        except Exception as e:
+            self._emit_output(f"[Niksnaks-Hosting] Could not stop the server: {e}\n")
+            self.status = ServerStatus.RUNNING
+            return False
+
+        deadline = time.monotonic() + max(1.0, float(timeout))
+        while time.monotonic() < deadline:
+            time.sleep(FOREIGN_STOP_POLL_SECONDS)
+            try:
+                if pid and not self.service.pid_alive(pid):
+                    break
+                if not pid and not self.service.foreign_process_pid():
+                    break
+            except Exception:
+                continue
+        else:
+            self._emit_output("[Niksnaks-Hosting] Server did not stop in time, killing...\n")
+            try:
+                if pid:
+                    self.service.kill_pid(pid)
+            except Exception:
+                pass
+            self._finish_stopped()
+            return False
+
+        self._emit_output("[Niksnaks-Hosting] Server stopped.\n")
+        self._finish_stopped()
+        return True
 
     def stop_and_wait(
         self,
@@ -257,12 +341,18 @@ class RemoteServerProcess(ServerProcess):
         """
         if not self.is_running:
             return True
+
         if self._foreign:
-            # Said, not silently skipped: this runs when the app is closing, and a
-            # server it never started is one it has no business claiming to have shut
-            # down cleanly.
-            self._emit_output(self._FOREIGN_REFUSAL.format(host=self.host.name))
-            return False
+            # Closing this app is not a reason to shut down a server it never started;
+            # it was running before the window opened and something else is looking
+            # after it. Said rather than done silently, because the shutdown screen is
+            # counting servers and this one is deliberately not among them.
+            self._emit_output(
+                f"[Niksnaks-Hosting] Leaving this server running on {self.host.name}: "
+                "it was started somewhere else, and closing this app does not stop it.\n"
+            )
+            return True
+
         self.status = ServerStatus.STOPPING
 
         # service.stop() blocks until the host has written the world out, so reporting
@@ -299,32 +389,44 @@ class RemoteServerProcess(ServerProcess):
         return stopped_in_time and not failure
 
     def kill(self) -> None:
-        try:
-            if self._foreign and self._pid:
-                # Not ours to ask the service manager about, but a pid is a pid.
-                self.service.kill_pid(int(self._pid))
-            else:
-                self.service.kill()
-        except Exception:
-            pass
-        self._finish_stopped()
+        def worker() -> None:
+            try:
+                if self._foreign and self._pid:
+                    # Not ours to ask the service manager about, but a pid is a pid.
+                    self.service.kill_pid(int(self._pid))
+                else:
+                    self.service.kill()
+            except Exception:
+                pass
+            self._finish_stopped()
+
+        # Killing is an SSH round trip and this comes straight off a button press.
+        threading.Thread(target=worker, daemon=True).start()
 
     def send_command(self, command: str) -> None:
         if not self.is_running:
             return
-        if self._foreign:
-            self._emit_output(self._FOREIGN_REFUSAL.format(host=self.host.name))
-            return
-        try:
-            self.service.send_console(command)
-        except Exception as e:
-            self._emit_output(f"[Niksnaks-Hosting] Could not send the command: {e}\n")
+
+        def worker() -> None:
+            try:
+                # A server something else started is not behind our unit's FIFO or its
+                # console port, but it is reading the folder's inbox, which is the one
+                # channel that does not depend on who launched it.
+                if self._foreign:
+                    self.service.send_console_file(command)
+                else:
+                    self.service.send_console(command)
+            except Exception as e:
+                self._emit_output(f"[Niksnaks-Hosting] Could not send the command: {e}\n")
+
+        # One SSH round trip, and this is called straight off the console entry.
+        threading.Thread(target=worker, daemon=True).start()
 
     # -------------------------------------------------------------------- output
-    def _start_console_reader(self) -> None:
+    def _start_console_reader(self, tail_lines: int = 0) -> None:
         def reader() -> None:
             try:
-                channel = self.service.follow_console()
+                channel = self.service.follow_console(tail_lines=tail_lines)
             except Exception as e:
                 self._emit_output(f"[Niksnaks-Hosting] Lost the console: {e}\n")
                 return
@@ -376,11 +478,15 @@ class RemoteServerProcess(ServerProcess):
                 if self._stopping.is_set() or self._status == ServerStatus.STOPPED:
                     return
                 if self._foreign:
-                    # There is no unit/task behind this process, so the only way to
-                    # know it is still there is to look for it again the same way it
-                    # was first found.
+                    # There is no unit/task behind this process to ask about itself, so
+                    # the pid is the whole of the evidence. Asking after that one pid is
+                    # a great deal cheaper than the scan that first turned it up, which
+                    # walks every process on the machine.
                     try:
-                        active = bool(self.service.foreign_process_pid())
+                        if self._pid:
+                            active = self.service.pid_alive(int(self._pid))
+                        else:
+                            active = bool(self.service.foreign_process_pid())
                     except Exception:
                         continue
                 else:
@@ -410,13 +516,38 @@ class RemoteServerProcess(ServerProcess):
         self._watch_thread = threading.Thread(target=watcher, daemon=True)
         self._watch_thread.start()
 
+    def _console_reaches_server(self) -> bool:
+        """Whether a line put in this folder's inbox would actually reach the server.
+
+        Two ways it can. A unit of ours -- possibly written by this app on a third
+        computer -- holds the inbox open as the process's stdin, in which case it is a
+        FIFO and an append goes straight in. Otherwise a copy of this app on the host is
+        running the server itself and watching the file, which it says in the folder's
+        owner marker. Neither is true for a server started by an older release, and
+        sending into that is how a world gets killed at the end of the grace period.
+        """
+        from niksnaks_hosting.shared.remote.ownership import console_is_watched
+        from niksnaks_hosting.shared.remote.remote_service import CONSOLE_IN
+
+        try:
+            if (self.server_dir / CONSOLE_IN).is_fifo():
+                return True
+        except Exception:
+            pass
+        try:
+            return console_is_watched(self.server_dir)
+        except Exception:
+            # Unreachable is not the same as unwatched, and refusing on a blip would be
+            # the wrong way round: let the stop be attempted and time out instead.
+            return True
+
     # ------------------------------------------------------------------ ownership
     def _other_owner(self):
         """Another install of this app that has been looking after this folder lately."""
         try:
             from niksnaks_hosting.shared.remote.ownership import other_owner
 
-            return other_owner(self.host, self.server_dir)
+            return other_owner(self.server_dir)
         except Exception:
             return None
 
@@ -429,7 +560,7 @@ class RemoteServerProcess(ServerProcess):
         try:
             from niksnaks_hosting.shared.remote.ownership import claim
 
-            claim(self.host, self.server_dir)
+            claim(self.server_dir, pid=int(self._pid or 0))
             self._last_heartbeat = time.monotonic()
         except Exception:
             pass
@@ -441,7 +572,7 @@ class RemoteServerProcess(ServerProcess):
             try:
                 from niksnaks_hosting.shared.remote.ownership import release
 
-                release(self.host, self.server_dir)
+                release(self.server_dir)
             except Exception:
                 pass
 
@@ -497,6 +628,18 @@ class RemoteServerProcess(ServerProcess):
         watcher below is told to keep re-scanning for it rather than asking the
         service manager about a unit that was never involved.
         """
+        if not self._adopt_lock.acquire(blocking=False):
+            return
+        try:
+            self._adopt_running_state(pid)
+        finally:
+            self._adopt_lock.release()
+
+    def _adopt_running_state(self, pid: int | None = None) -> None:
+        if self._status != ServerStatus.STOPPED and pid is None:
+            # Another round got there first while this one was waiting on the host.
+            return
+
         self._foreign = pid is not None
         if not self._foreign:
             try:
@@ -528,11 +671,15 @@ class RemoteServerProcess(ServerProcess):
         self.status = ServerStatus.RUNNING
         self._stopping.clear()
         self._claim_ownership()
-        try:
-            self._emit_output(self.service.read_console_tail())
-        except Exception:
-            pass
-        self._start_console_reader()
+        if self._foreign:
+            self._emit_output(
+                f"[Niksnaks-Hosting] This server is running on {self.host.name} as "
+                f"process {pid}, started by something else. Its console is read from "
+                "the server folder, so it can still be watched and stopped from here.\n"
+            )
+        # The follower replays the tail itself rather than the tail being fetched
+        # separately and then replayed again by a stream that starts from the top.
+        self._start_console_reader(tail_lines=ADOPT_TAIL_LINES)
         self._start_state_watch()
 
     def refresh_state(self) -> None:

@@ -5,9 +5,10 @@ gi.require_version("Adw", "1")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Adw, Gdk, Gio, GObject, Gtk
 
+from niksnaks_hosting.gtk_ui.background import read_then_show
 from niksnaks_hosting.shared.backend.server_manager import ServerInfo, ServerManager
 from niksnaks_hosting.shared.utils.constants import ServerStatus
-from niksnaks_hosting.shared.utils.image_utils import load_pixbuf
+from niksnaks_hosting.shared.utils.image_utils import load_texture
 
 class ServerRow(Adw.ActionRow):
     def __init__(self, server_info: ServerInfo, server_manager: ServerManager):
@@ -68,13 +69,25 @@ class ServerRow(Adw.ActionRow):
             self.set_subtitle(text)
 
     def _update_icon(self):
-        if self.server_info.icon_path:
-            try:
-                texture = Gdk.Texture.new_for_pixbuf(load_pixbuf(self.server_info.icon_path, 42))
-                paintable = texture
-                self._avatar.set_custom_image(paintable)
-            except Exception:
-                pass
+        """Put this server's picture on the row, fetching it from its host if need be.
+
+        A picture on another computer is an SFTP read away, which is not something the
+        main loop can wait on -- so the row draws its initials and the picture replaces
+        them when it arrives, if the row is still showing the same server by then.
+        """
+        info = self.server_info
+        read_then_show(
+            remote=info.is_remote,
+            read=lambda: self._server_manager.icon_bytes(info),
+            show=self._show_icon,
+            fallback=b"",
+            still_wanted=lambda: self.server_info.id == info.id,
+        )
+
+    def _show_icon(self, data: bytes) -> None:
+        texture = load_texture(data)
+        if texture is not None:
+            self._avatar.set_custom_image(texture)
 
     def _on_status_changed(self, process, status):
         self._update_status(status)

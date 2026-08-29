@@ -256,6 +256,15 @@ def get_required_java_version(mc_version: str) -> int:
 
     return DEFAULT_JAVA_VERSION
 
+# A server folder carries its own console, so any copy of this app that can see the
+# folder can read what the server is saying and type back to it -- whichever machine
+# started it, and whichever copy of the app. console.log is the transcript of the run;
+# console.in is the inbox commands are appended to. On a Linux host running a server
+# through our own systemd unit console.in is a FIFO held open as the process's stdin,
+# which a plain append writes into just the same, so writers never have to know which.
+CONSOLE_LOG_FILE = "console.log"
+CONSOLE_IN_FILE = "console.in"
+
 # A server folder holds two pictures: icon.png, the app's own copy that the sidebar
 # draws, and server-icon.png, the one Minecraft shows in the multiplayer list. Both are
 # written from the picture the user picks, so a modpack is not free to paint over them.
@@ -265,8 +274,13 @@ ICON_FILES = frozenset({USER_ICON_FILE, MINECRAFT_ICON_FILE})
 
 def has_user_server_icon(server_dir: Path | str) -> bool:
     # Only the icon picker and the create dialog write icon.png, and no modpack is
-    # allowed to, so the file being there means the user picked a picture.
-    return (Path(server_dir) / USER_ICON_FILE).is_file()
+    # allowed to, so the file being there means the user picked a picture. The folder is
+    # asked as it was handed over, since a server's may well be on another computer.
+    root = server_dir if hasattr(server_dir, "is_file") else Path(server_dir)
+    try:
+        return (root / USER_ICON_FILE).is_file()
+    except Exception:
+        return False
 
 def is_pack_protected_icon(server_dir: Path | str, target: Path) -> bool:
     # icon.png is the app's alone. A pack may still give a server its picture through

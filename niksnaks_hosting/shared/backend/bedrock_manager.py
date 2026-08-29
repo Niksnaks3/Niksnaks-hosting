@@ -2,7 +2,6 @@ import os
 import re
 import stat
 import sys
-import threading
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -101,16 +100,6 @@ class BedrockManager:
             options.append(BedrockVersionOption(match.group(1), url, preview=preview))
 
         return options
-
-    def fetch_versions_async(
-        self, callback: Callable[[list[BedrockVersionOption]], None], platform: str = ""
-    ):
-        def _fetch():
-            callback(self.fetch_versions(platform))
-
-        thread = threading.Thread(target=_fetch, daemon=True)
-        thread.start()
-        return thread
 
     def download_package(
         self,

@@ -110,7 +110,7 @@ def show_hosts_dialog(parent: Gtk.Window, hosts: HostsManager, manager=None) -> 
         add_row = Adw.ActionRow(title=_("Add a host…"))
         add_row.add_prefix(Gtk.Image.new_from_icon_name("list-add-symbolic"))
         add_row.set_activatable(True)
-        add_row.connect("activated", lambda _r: _show_add_host(dialog, hosts, rebuild))
+        add_row.connect("activated", lambda _r: _show_add_host(dialog, hosts, rebuild, manager))
         group.add(add_row)
         rows.append(add_row)
 
@@ -366,7 +366,7 @@ def _remove_host(parent, hosts: HostsManager, host, on_done) -> None:
     threading.Thread(target=worker, daemon=True).start()
 
 
-def _show_add_host(parent, hosts: HostsManager, on_done) -> None:
+def _show_add_host(parent, hosts: HostsManager, on_done, manager=None) -> None:
     dialog = Adw.AlertDialog()
     dialog.set_heading(_("Add a host"))
     dialog.set_body(_("Niksnaks-Hosting connects over SSH and installs what it needs."))
@@ -396,6 +396,14 @@ def _show_add_host(parent, hosts: HostsManager, on_done) -> None:
                 # It works, so the host is kept -- but say what will not survive a restart.
                 _alert(parent, _("Added {}").format(label), detail)
             on_done()
+
+            if host is not None and manager is not None:
+                # A machine is usually added because of what is already on it. Asking it
+                # what its own copy of this app is running saves the user finding that
+                # out and typing it in, and says nothing at all if there is nothing there.
+                from niksnaks_hosting.gtk_ui.dialogs.adopt_servers import offer_adopt_if_any
+
+                offer_adopt_if_any(parent, manager, host)
 
         add_host_and_verify(hosts, draft, on_step=lambda _text: None, on_done=finished)
 

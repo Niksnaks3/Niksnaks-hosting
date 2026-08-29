@@ -1,3 +1,4 @@
+import os
 import re
 import subprocess
 import threading
@@ -8,7 +9,10 @@ from pathlib import Path
 
 from niksnaks_hosting.shared.backend.loader_launch import resolve_launch_args
 from niksnaks_hosting.shared.core.events import EventEmitter
+from niksnaks_hosting.shared.remote.ownership import HEARTBEAT_SECONDS
 from niksnaks_hosting.shared.utils.constants import (
+    CONSOLE_IN_FILE,
+    CONSOLE_LOG_FILE,
     EDITION_JAVA,
     LOADER_FABRIC,
     ServerStatus,
@@ -22,6 +26,118 @@ from niksnaks_hosting.shared.utils import memory_limit
 from niksnaks_hosting.shared.utils.subprocess_utils import hidden_subprocess_kwargs
 
 LOG_HISTORY_LINES = 1000
+
+# How often the folder's inbox is checked for a command typed from somewhere else, and
+# how often an adopted server's log and process are looked at. Half a second is below
+# what a person notices and costs one stat of a small file.
+INBOX_POLL_SECONDS = 0.5
+ADOPT_POLL_SECONDS = 2.0
+
+# How much of an existing console.log to show when picking up a server that was already
+# running. A server up for a week has a log nobody wants replayed in full.
+ADOPT_TAIL_BYTES = 64 * 1024
+
+# The names a Minecraft server process goes by. Bedrock is its own binary; Java Edition
+# is whatever JVM launched it, which is java on every platform and javaw on Windows.
+SERVER_PROCESS_NAMES = ("java", "bedrock_server")
+
+# One scan of the machine answers for every server, and the answer is held briefly: a
+# sweep asks about each server in turn, and walking every process once per server is the
+# same work repeated as many times as there are servers.
+PID_SCAN_CACHE_SECONDS = 3.0
+
+_pid_scan: tuple[float, dict[str, int]] = (0.0, {})
+_pid_scan_lock = threading.Lock()
+
+
+def running_server_pids(fresh: bool = False) -> dict[str, int]:
+    """Which folders on this machine have a Minecraft server running in them.
+
+    Keyed by the folder's real path, so a server started by anything at all -- another
+    copy of this app, or a systemd unit a copy on another computer wrote -- is found.
+    The working directory is what is matched on, because the folder is the thing that
+    must not be opened twice and the command line is not something this app controls.
+    """
+    global _pid_scan
+    with _pid_scan_lock:
+        stamp, found = _pid_scan
+        if not fresh and time.monotonic() - stamp < PID_SCAN_CACHE_SECONDS:
+            return found
+
+    import psutil
+
+    mine = os.getpid()
+    found = {}
+    for process in psutil.process_iter(["pid", "name"]):
+        try:
+            if process.pid == mine:
+                continue
+            name = (process.info.get("name") or "").lower()
+            if not name.startswith(SERVER_PROCESS_NAMES):
+                continue
+            cwd = process.cwd()
+            if cwd:
+                found.setdefault(os.path.realpath(cwd), process.pid)
+        except Exception:
+            # A process that went away mid-scan, or one this account may not look at.
+            continue
+
+    with _pid_scan_lock:
+        _pid_scan = (time.monotonic(), found)
+    return found
+
+
+def forget_running_server_pids() -> None:
+    """Drop the memoised scan, so the next question is answered by looking again.
+
+    Called when this app has just changed what is running. A scan taken a moment before
+    a server was launched is not merely stale, it is the one answer that would have the
+    app conclude the server it just started is not there.
+    """
+    global _pid_scan
+    with _pid_scan_lock:
+        _pid_scan = (0.0, {})
+
+
+def server_pid_in(server_dir: Path | str, fresh: bool = False) -> int:
+    """The pid of a server running out of *server_dir*, or 0 if the folder is free."""
+    try:
+        root = os.path.realpath(str(server_dir))
+    except OSError:
+        return 0
+    return running_server_pids(fresh=fresh).get(root, 0)
+
+
+def pid_alive(pid: int | None) -> bool:
+    """Whether a process is still doing anything.
+
+    A zombie is deliberately not alive. A server started by another copy of this app is
+    that app's child, and it stays in the process table as a zombie until that app
+    reaps it -- so pid_exists() alone would have a server that has finished saving and
+    exited still read as running, which is exactly the answer a stop is waiting on.
+    """
+    if not pid:
+        return False
+    try:
+        import psutil
+
+        return psutil.Process(int(pid)).status() != psutil.STATUS_ZOMBIE
+    except Exception:
+        # NoSuchProcess is the common case and means gone; anything else -- a process
+        # belonging to another account, say -- is not evidence either way, and the
+        # caller only ever asks about one it has already seen.
+        return False
+
+
+def kill_pid(pid: int | None) -> None:
+    if not pid:
+        return
+    try:
+        import psutil
+
+        psutil.Process(int(pid)).kill()
+    except Exception:
+        pass
 
 # How long a server gets to write its world out before we stop being polite. A vanilla
 # world saves in a second or two; a big modded one with a few hundred loaded chunks can
@@ -57,6 +173,20 @@ class ServerProcess(EventEmitter):
         # Bounded by the deque itself: dropping the oldest line is then O(1) rather than
         # shifting a thousand entries on every line the server prints.
         self.log_history: deque[str] = deque(maxlen=LOG_HISTORY_LINES)
+        # This run's transcript in the server's own folder, so anything that can see the
+        # folder -- including this app running on another computer -- can read along.
+        self._console_log = None
+        self._console_lock = threading.Lock()
+        self._console_share_open = False
+        # Set when the running server was found rather than started here: another copy
+        # of this app, or a unit a copy on another computer wrote. There is no pipe to
+        # it, so its console and its stop both go through the folder instead.
+        self._adopted = False
+        self._adopt_stop = threading.Event()
+        # Adoption is asked for from more than one thread -- when the process is first
+        # built, and by every state sweep while it still looks stopped. Two that got
+        # through at once would leave two log followers on one server.
+        self._adopt_lock = threading.Lock()
 
     @property
     def status(self) -> str:
@@ -68,6 +198,7 @@ class ServerProcess(EventEmitter):
             self._status = value
             if value == ServerStatus.STOPPED:
                 self._release_memory_limit()
+                self._close_console_share()
             self.emit_on_main_thread("status-changed", value)
 
     def _release_memory_limit(self) -> None:
@@ -91,6 +222,18 @@ class ServerProcess(EventEmitter):
     def is_bedrock(self) -> bool:
         return is_bedrock(self.edition)
 
+    @property
+    def command_echoes_back(self) -> bool:
+        """Whether a command sent from here will come back in this server's output.
+
+        A command typed at the app that is actually running the server goes down a pipe
+        and is never seen again -- so the console view has to show it. One that goes
+        through the folder's inbox is read by that other app, which types it in and says
+        so in the console both apps are reading, and echoing it here as well would show
+        it twice.
+        """
+        return self._adopted
+
     def _build_bedrock_command(self) -> tuple[list[str], str]:
         from niksnaks_hosting.shared.backend.bedrock_manager import BedrockManager
 
@@ -110,6 +253,15 @@ class ServerProcess(EventEmitter):
         if self.is_running:
             return False
 
+        # Two JVMs on one world directory corrupt it, and this folder is not
+        # necessarily driven from here alone: another copy of this app, or a unit that
+        # a copy on another computer wrote onto this machine, may already be running
+        # it. Attaching to that is the only answer that does not damage the world.
+        if server_pid_in(self.server_dir, fresh=True):
+            self.adopt_running_state()
+            return False
+
+        self._adopted = False
         env = None
 
         if self.is_bedrock:
@@ -171,6 +323,8 @@ class ServerProcess(EventEmitter):
 
             self._process = subprocess.Popen(cmd, **popen_kwargs)
             self._pid = self._process.pid
+            forget_running_server_pids()
+            self._open_console_share()
 
             if self.is_bedrock:
                 self._memory_limit_job = memory_limit.apply_to_process(self._pid, self.ram_mb)
@@ -186,6 +340,9 @@ class ServerProcess(EventEmitter):
             return False
 
     def stop(self):
+        if self._adopted:
+            self._stop_adopted()
+            return
         if not self.is_running or not self._process:
             return
 
@@ -222,6 +379,16 @@ class ServerProcess(EventEmitter):
         caller can show that something is still happening. Returns False if the server had
         to be killed because it ignored the stop command for *timeout* seconds.
         """
+        if self._adopted:
+            # Closing this app is not a reason to shut down a server it never started.
+            # It was running before the window opened and belongs to whatever did start
+            # it, which may well be a person sitting at another computer.
+            self._emit_output(
+                "[Niksnaks-Hosting] Leaving this server running: it was started "
+                "somewhere else, and closing this app does not stop it.\n"
+            )
+            return True
+
         process = self._process
         if not self.is_running or not process:
             return True
@@ -258,6 +425,11 @@ class ServerProcess(EventEmitter):
         return stopped_on_its_own
 
     def kill(self):
+        if self._adopted:
+            self._emit_output("[Niksnaks-Hosting] Server killed.\n")
+            kill_pid(self._pid)
+            self._finish_adopted()
+            return
         if self._process:
             try:
                 self._process.kill()
@@ -271,12 +443,18 @@ class ServerProcess(EventEmitter):
             self._emit_output("[Niksnaks-Hosting] Server killed.\n")
 
     def send_command(self, command: str):
-        if not self._process or not self._process.stdin:
-            return
-
         cmd = command.strip()
         if cmd.startswith("/"):
             cmd = cmd[1:]
+        if not cmd:
+            return
+
+        if self._adopted:
+            self._write_inbox(cmd)
+            return
+
+        if not self._process or not self._process.stdin:
+            return
 
         try:
             self._process.stdin.write(cmd + "\n")
@@ -300,6 +478,16 @@ class ServerProcess(EventEmitter):
         except Exception:
             pass
         finally:
+            # Reaped here rather than left for whoever notices: the output ending means
+            # the process has gone, and an unreaped child stays in the process table
+            # looking for all the world like a server that is still running -- to this
+            # app's own scan, and to a copy of it on another computer.
+            try:
+                if self._process is not None:
+                    self._process.wait(timeout=10)
+            except Exception:
+                pass
+            forget_running_server_pids()
 
             if self._status != ServerStatus.STOPPED:
                 self._pid = None
@@ -310,10 +498,335 @@ class ServerProcess(EventEmitter):
 
     def _emit_output(self, text: str):
         self.log_history.append(text)
+        self._write_console_log(text)
         self.emit_on_main_thread("output-received", text)
 
     def _emit_players_changed(self):
         self.emit_on_main_thread("players-changed", self.player_count, self.max_players)
+
+    # ------------------------------------------------------- the folder's console
+    # A server folder carries its own console: console.log is what the server has said
+    # this run, console.in is what anyone wants to say back. Keeping both on disk is
+    # what lets a copy of this app on another computer read the console of a server
+    # started here, and type into it -- the same two files a remote host's unit uses,
+    # so neither side has to know which of them started the server.
+
+    @property
+    def _console_log_path(self) -> Path:
+        return self.server_dir / CONSOLE_LOG_FILE
+
+    @property
+    def _console_in_path(self) -> Path:
+        return self.server_dir / CONSOLE_IN_FILE
+
+    def _open_console_share(self) -> None:
+        """Start this run's transcript and open the folder's inbox for commands."""
+        try:
+            self.server_dir.mkdir(parents=True, exist_ok=True)
+            # Truncated per run, exactly as the remote unit does it, so a reader that
+            # attaches later sees this run rather than every run there has ever been.
+            self._console_log = self._console_log_path.open(
+                "w", encoding="utf-8", errors="replace", buffering=1
+            )
+        except OSError:
+            self._console_log = None
+
+        inbox = self._console_in_path
+        try:
+            # A FIFO left behind by a unit that used to run this folder would block the
+            # plain open below forever, so whatever is there goes and a file replaces it.
+            inbox.unlink(missing_ok=True)
+            inbox.touch()
+        except OSError:
+            self._console_share_open = self._console_log is not None
+            return
+
+        self._console_share_open = True
+        self._adopt_stop.clear()
+        self._claim_folder()
+        threading.Thread(target=self._read_inbox, daemon=True).start()
+
+    def _close_console_share(self) -> None:
+        self._adopt_stop.set()
+        if not self._console_share_open:
+            # Never opened one, so there is nothing here that is ours to close or
+            # remove. An adopted server's files belong to whatever is running it.
+            return
+        self._console_share_open = False
+        with self._console_lock:
+            handle, self._console_log = self._console_log, None
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError:
+                pass
+        try:
+            self._console_in_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        self._release_folder()
+
+    def _write_console_log(self, text: str) -> None:
+        with self._console_lock:
+            handle = self._console_log
+            if handle is None:
+                return
+            try:
+                handle.write(text)
+            except (OSError, ValueError):
+                # A full disk must not take the server down with it; the console on
+                # screen carries on, only the copy other computers read stops.
+                self._console_log = None
+
+    def _read_inbox(self) -> None:
+        """Type anything appended to console.in into the running server.
+
+        This is the far side of the same channel a remote host offers: another computer
+        appends a line to the file over SFTP, and it arrives on the server's stdin here.
+        """
+        path = self._console_in_path
+        offset = 0
+        pending = ""
+        last_claim = time.monotonic()
+        while not self._adopt_stop.wait(INBOX_POLL_SECONDS):
+            # This thread is already awake on a timer, so keeping the folder's marker
+            # fresh rides along on it rather than costing a thread of its own.
+            if time.monotonic() - last_claim >= HEARTBEAT_SECONDS:
+                last_claim = time.monotonic()
+                self._claim_folder()
+            try:
+                size = path.stat().st_size
+            except OSError:
+                # Somebody removed it, so nothing more can arrive through it.
+                return
+            if size < offset:
+                # A writer used > rather than >>; start again from the top.
+                offset = 0
+            if size == offset:
+                continue
+            try:
+                with path.open("rb") as handle:
+                    handle.seek(offset)
+                    chunk = handle.read()
+            except OSError:
+                continue
+            offset += len(chunk)
+            pending += chunk.decode("utf-8", errors="replace")
+            # Hold back a partial last line: an append caught mid-write is not a command.
+            *lines, pending = pending.split("\n")
+            for line in lines:
+                text = line.strip()
+                if not text:
+                    continue
+                # Echoed so this computer's console shows what the other one typed,
+                # rather than only the server's answer to a command nobody here sent.
+                self._emit_output(f"> {text}\n")
+                self.send_command(text)
+
+    def _write_inbox(self, line: str) -> None:
+        """Hand a command to whatever is actually running the server in this folder.
+
+        A unit written from another computer holds console.in open as the process's
+        stdin, so an append lands straight in the server's console. A copy of this app
+        running it as a child process is watching the same file and types it in.
+        """
+        path = self._console_in_path
+        text = line.rstrip("\n") + "\n"
+        try:
+            if path.is_fifo():
+                # Nothing is draining a FIFO with no reader, and a blocking open would
+                # hang this thread for the rest of the run rather than fail.
+                handle = os.open(str(path), os.O_WRONLY | os.O_NONBLOCK)
+                try:
+                    os.write(handle, text.encode("utf-8"))
+                finally:
+                    os.close(handle)
+            else:
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(text)
+        except OSError as e:
+            self._emit_output(f"[Niksnaks-Hosting] Could not send the command: {e}\n")
+
+    def _claim_folder(self) -> None:
+        """Say in the folder that this app is running the server and reading its inbox.
+
+        Written where another computer can see it, because that is the only way one can
+        tell an inbox nobody is watching from one that has simply not been read yet --
+        and a stop sent into the first of those ends with a world being killed.
+        """
+        try:
+            from niksnaks_hosting.shared.remote.ownership import claim
+
+            claim(self.server_dir, pid=int(self._pid or 0))
+        except Exception:
+            pass
+
+    def _release_folder(self) -> None:
+        try:
+            from niksnaks_hosting.shared.remote.ownership import release
+
+            release(self.server_dir)
+        except Exception:
+            pass
+
+    def _console_reaches_server(self) -> bool:
+        """Whether a line put in this folder's inbox would actually reach the server.
+
+        Two ways it can. A unit written onto this machine from another computer holds
+        the inbox open as the process's stdin, in which case it is a FIFO and an append
+        goes straight in. Otherwise a copy of this app is running the server itself and
+        watching the file, which it says in the folder's owner marker.
+        """
+        try:
+            if self._console_in_path.is_fifo():
+                return True
+        except OSError:
+            pass
+        try:
+            from niksnaks_hosting.shared.remote.ownership import console_is_watched
+
+            return console_is_watched(self.server_dir)
+        except Exception:
+            return False
+
+    # ------------------------------------------------------------------- adoption
+    def adopt_running_state(self) -> None:
+        """Pick up a server already running in this folder that this app did not start.
+
+        One folder can be driven from more than one place: another copy of this app on
+        this machine, or a copy on another computer that started it here through a
+        systemd unit. The process is on this machine either way and its console is in
+        the folder, so there is no reason for this app to show it as switched off.
+        """
+        if not self._adopt_lock.acquire(blocking=False):
+            return
+        try:
+            self._adopt_running_state()
+        finally:
+            self._adopt_lock.release()
+
+    def _adopt_running_state(self) -> None:
+        if self.is_running:
+            return
+        if self._process is not None and self._process.poll() is None:
+            return
+        pid = server_pid_in(self.server_dir)
+        if not pid:
+            return
+
+        self._adopted = True
+        self._pid = pid
+        self._adopt_stop.clear()
+        self.status = ServerStatus.RUNNING
+        self._emit_output(
+            f"[Niksnaks-Hosting] This server is already running here as process {pid}, "
+            "started by something else. Reading its console from the server folder.\n"
+        )
+        threading.Thread(target=self._follow_console_log, daemon=True).start()
+        threading.Thread(target=self._watch_adopted_pid, daemon=True).start()
+
+    def refresh_state(self) -> None:
+        """Ask this machine again whether something has started this server behind us.
+
+        A running server is already being watched. A stopped one has nothing watching
+        it, so without this a server started from another computer stays greyed out
+        here until the app is next opened.
+        """
+        if self._status != ServerStatus.STOPPED:
+            return
+        self.adopt_running_state()
+
+    def _follow_console_log(self) -> None:
+        """Read the folder's transcript as it is written, for a server we did not start."""
+        path = self._console_log_path
+        try:
+            offset = max(0, path.stat().st_size - ADOPT_TAIL_BYTES)
+        except OSError:
+            offset = 0
+        skip_partial = offset > 0
+        pending = ""
+        while not self._adopt_stop.is_set():
+            try:
+                size = path.stat().st_size
+            except OSError:
+                # No transcript yet -- a Bedrock server started by an older build, say.
+                # Keep looking: the folder is shared, and one may appear at any time.
+                if self._adopt_stop.wait(INBOX_POLL_SECONDS):
+                    return
+                continue
+            if size < offset:
+                offset = 0
+            if size > offset:
+                try:
+                    with path.open("rb") as handle:
+                        handle.seek(offset)
+                        chunk = handle.read()
+                except OSError:
+                    chunk = b""
+                offset += len(chunk)
+                text = chunk.decode("utf-8", errors="replace")
+                if skip_partial:
+                    # Starting at a byte offset lands mid-line; that half line is not
+                    # worth showing as though the server had printed it.
+                    skip_partial = False
+                    _before, _sep, text = text.partition("\n")
+                pending += text
+                *lines, pending = pending.split("\n")
+                for line in lines:
+                    self._handle_adopted_line(line + "\n")
+            if self._adopt_stop.wait(INBOX_POLL_SECONDS):
+                return
+
+    def _handle_adopted_line(self, line: str) -> None:
+        self._update_player_count_from_output(line)
+        self._emit_output(line)
+
+    def _watch_adopted_pid(self) -> None:
+        """Notice an adopted server going away; there is no process object to wait on."""
+        while not self._adopt_stop.wait(ADOPT_POLL_SECONDS):
+            if not pid_alive(self._pid):
+                self._emit_output("[Niksnaks-Hosting] The server stopped.\n")
+                self._finish_adopted()
+                return
+
+    def _stop_adopted(self) -> None:
+        """Stop a server this app did not start, by typing into the folder's console."""
+        if not self._console_reaches_server():
+            self._emit_output(
+                "[Niksnaks-Hosting] Nothing is listening to this server's console, so a "
+                "stop sent from here would not arrive. It was started by something that "
+                "does not read the server folder -- an older Niksnaks-Hosting, or a "
+                "script. Stop it where it was started, or use Force stop.\n"
+            )
+            return
+
+        self.status = ServerStatus.STOPPING
+        self._emit_output("[Niksnaks-Hosting] Sending stop command...\n")
+        pid = self._pid
+
+        def worker() -> None:
+            if not self.is_bedrock:
+                self.send_command("save-all flush")
+            self.send_command("stop")
+            deadline = time.monotonic() + STOP_GRACE_SECONDS
+            while time.monotonic() < deadline and pid_alive(pid):
+                time.sleep(0.5)
+            if pid_alive(pid):
+                self._emit_output("[Niksnaks-Hosting] Server did not stop in time, killing...\n")
+                kill_pid(pid)
+            self._emit_output("[Niksnaks-Hosting] Server stopped.\n")
+            self._finish_adopted()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_adopted(self) -> None:
+        self._adopt_stop.set()
+        self._adopted = False
+        self._pid = None
+        self.player_count = 0
+        self.status = ServerStatus.STOPPED
+        self._emit_players_changed()
+
 
     def set_max_players(self, max_players: int):
         self.max_players = max(1, int(max_players))

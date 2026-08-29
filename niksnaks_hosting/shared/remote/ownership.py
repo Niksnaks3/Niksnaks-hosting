@@ -10,6 +10,13 @@ catches the one that is about to: a marker in the server folder, refreshed while
 server runs, saying which install is looking after it. A marker nobody has touched for a
 few minutes is left over from an app that was closed, and means nothing.
 
+The marker answers a second question too. A server started by another copy of this app is
+reachable only through the inbox in its folder, and only because that copy is watching
+the inbox and typing what arrives into the process. Whether anyone is doing that is not
+something the folder shows on its own -- an unread inbox looks exactly like one that has
+not been read *yet* -- so the marker says it, and a stop that would otherwise sit there
+unanswered until the world got killed can say plainly that nothing is listening.
+
 It is advisory on purpose. Nothing here can stop a determined second app, and a lock file
 that outlived a crash would be worse than the problem -- a server that cannot be started
 and no obvious way to say it is fine.
@@ -23,12 +30,9 @@ import socket
 import time
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from niksnaks_hosting.shared.utils.constants import DATA_DIR
-
-if TYPE_CHECKING:
-    from niksnaks_hosting.shared.remote.host import SshHost
 
 OWNER_FILE = "niksnaks-owner.json"
 
@@ -52,6 +56,11 @@ class Owner:
     install_id: str
     label: str
     at: float
+    # Whether this owner is watching the folder's inbox and typing what arrives into
+    # the server. Everything that writes a marker does, so this is only ever false for
+    # a marker left by a release that did not have the console channel at all.
+    console: bool = False
+    pid: int = 0
 
     @property
     def age(self) -> float:
@@ -103,11 +112,15 @@ def install_label() -> str:
     return machine or user or _("another computer")
 
 
-def read_owner(host: SshHost, server_dir: Any) -> Owner | None:
-    """Whatever the marker says, or None if there is not one that can be read."""
+def read_owner(server_dir: Any) -> Owner | None:
+    """Whatever the marker says, or None if there is not one that can be read.
+
+    *server_dir* is the folder itself -- a Path for a server on this machine, a
+    RemotePath for one on a host. Both answer read_text the same way, which is what
+    lets one copy of this file serve a local server and a remote one.
+    """
     try:
-        raw = host.path(f"{server_dir}/{OWNER_FILE}").read_text(errors="replace")
-        data = json.loads(raw)
+        data = json.loads((server_dir / OWNER_FILE).read_text(errors="replace"))
     except Exception:
         return None
     if not isinstance(data, dict):
@@ -117,43 +130,59 @@ def read_owner(host: SshHost, server_dir: Any) -> Owner | None:
             install_id=str(data.get("install_id", "") or ""),
             label=str(data.get("label", "") or ""),
             at=float(data.get("at") or 0.0),
+            console=bool(data.get("console", False)),
+            pid=int(data.get("pid") or 0),
         )
     except (TypeError, ValueError):
         return None
 
 
-def other_owner(host: SshHost, server_dir: Any) -> Owner | None:
+def other_owner(server_dir: Any) -> Owner | None:
     """A different install that has been looking after this server recently."""
-    owner = read_owner(host, server_dir)
+    owner = read_owner(server_dir)
     if owner is None or owner.is_us or not owner.fresh or not owner.install_id:
         return None
     return owner
 
 
-def claim(host: SshHost, server_dir: Any) -> None:
+def console_is_watched(server_dir: Any) -> bool:
+    """Whether some copy of this app is currently reading this folder's inbox.
+
+    The question a stop has to ask before it sends one: a line appended to the inbox of
+    a server nobody is watching sits there unread, and waiting out the grace period on
+    that only ends in a server being killed with its world half written.
+    """
+    owner = read_owner(server_dir)
+    return bool(owner and owner.fresh and owner.console)
+
+
+def claim(server_dir: Any, pid: int = 0) -> None:
     """Say this app is looking after the server now, and stamp the time."""
     payload = {
         "install_id": install_id(),
         "label": install_label(),
         "at": time.time(),
+        # Everything that writes a marker is watching the inbox by the time it does.
+        "console": True,
+        "pid": int(pid or 0),
     }
     try:
-        host.path(f"{server_dir}/{OWNER_FILE}").write_text(json.dumps(payload, indent=2))
+        (server_dir / OWNER_FILE).write_text(json.dumps(payload, indent=2))
     except Exception:
         # Not being able to write the marker is not a reason to refuse to run a server.
         pass
 
 
-def release(host: SshHost, server_dir: Any) -> None:
+def release(server_dir: Any) -> None:
     """Stop claiming it, so another app sees the folder as free straight away.
 
     Only this app's own marker is removed. Deleting someone else's would be the one way
     this file could make the collision it exists to prevent more likely.
     """
     try:
-        owner = read_owner(host, server_dir)
+        owner = read_owner(server_dir)
         if owner is not None and not owner.is_us:
             return
-        host.path(f"{server_dir}/{OWNER_FILE}").unlink(missing_ok=True)
+        (server_dir / OWNER_FILE).unlink(missing_ok=True)
     except Exception:
         pass

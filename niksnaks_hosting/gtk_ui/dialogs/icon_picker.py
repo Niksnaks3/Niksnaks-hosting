@@ -6,17 +6,26 @@ from pathlib import Path
 
 from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, GObject, Gtk
 
+from niksnaks_hosting.shared.utils.constants import TEMP_DIR
 from niksnaks_hosting.shared.utils.image_utils import convert_to_png, load_pixbuf
 
 class IconPickerDialog(Adw.Dialog):
+    """Pick a picture for a server. Says which file to use; never where it goes.
+
+    The converted picture is written to this app's scratch space and handed on as a
+    path, because the folder it belongs in may be on another computer -- and PIL, which
+    does the converting, can only write to this machine's disk. Whoever receives
+    icon-selected puts it where it goes.
+    """
+
     __gsignals__ = {
         "icon-selected": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
     }
 
-    def __init__(self, server_id: str, server_dir: str):
+    def __init__(self, server_id: str):
         super().__init__()
         self._server_id = server_id
-        self._server_dir = Path(server_dir)
+        self._scratch = TEMP_DIR / f"icon-{server_id}"
         self._source_path = None
         self._pixbuf = None
 
@@ -137,19 +146,16 @@ class IconPickerDialog(Adw.Dialog):
         except Exception as e:
             print(f"Failed to load image: {e}")
 
+    def _converted(self) -> Path:
+        """The picked picture, cropped square and converted, on this machine's disk."""
+        self._scratch.mkdir(parents=True, exist_ok=True)
+        output_path = self._scratch / "icon.png"
+        convert_to_png(self._source_path, str(output_path), size=128)
+        return output_path
+
     def _generate_cropped_preview(self):
         try:
-
-            output_path = self._server_dir / "icon_preview.png"
-            self._server_dir.mkdir(parents=True, exist_ok=True)
-
-            convert_to_png(
-                self._source_path,
-                str(output_path),
-                size=128,
-            )
-
-            pixbuf = load_pixbuf(str(output_path), 48)
+            pixbuf = load_pixbuf(str(self._converted()), 48)
             if pixbuf:
                 texture = Gdk.Texture.new_for_pixbuf(pixbuf)
                 self._result_avatar.set_custom_image(texture)
@@ -162,19 +168,7 @@ class IconPickerDialog(Adw.Dialog):
             return
 
         try:
-            output_path = self._server_dir / "icon.png"
-            self._server_dir.mkdir(parents=True, exist_ok=True)
-
-            convert_to_png(
-                self._source_path,
-                str(output_path),
-                size=128,
-            )
-
-            preview_path = self._server_dir / "icon_preview.png"
-            preview_path.unlink(missing_ok=True)
-
-            self.emit("icon-selected", str(output_path))
+            self.emit("icon-selected", str(self._converted()))
             self.close()
 
         except Exception as e:

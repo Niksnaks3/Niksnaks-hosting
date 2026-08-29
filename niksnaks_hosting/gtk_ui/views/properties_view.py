@@ -498,7 +498,7 @@ class PropertiesView(Gtk.Box):
 
             current = info.mc_version
             if bedrock:
-                versions = [option.version for option in self._server_manager.bedrock_manager.fetch_versions()]
+                versions = [option.version for option in self._server_manager.bedrock_versions(info)]
             else:
                 versions = self._server_manager.download_manager.fetch_game_versions()
             has_upgrade = any(ServerManager.is_version_after(v, current) for v in versions)
@@ -945,7 +945,13 @@ class PropertiesView(Gtk.Box):
 
             GLib.idle_add(done)
 
-        server_manager.bedrock_manager.fetch_versions_async(on_versions)
+        # Asked for the machine the server is on: version numbers match across
+        # platforms but the downloads do not, and a Windows host handed a Linux
+        # build's URL ends up with a folder full of files it cannot run.
+        threading.Thread(
+            target=lambda: on_versions(server_manager.bedrock_versions(server_info)),
+            daemon=True,
+        ).start()
 
         cancel_btn.connect("clicked", lambda *_a: dialog.close())
 

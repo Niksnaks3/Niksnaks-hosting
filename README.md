@@ -66,7 +66,14 @@ graphs in the same window.
   streams its console back. Servers keep running on the host after you close the app,
   and are picked up again next time you open it.
 - **Adopt an existing install** — if Niksnaks-Hosting is already managing servers on that
-  host, the app finds them and offers to bring them under this app's control too.
+  host, the app asks it what those are as soon as you add the machine, and offers to
+  bring them under this app's control too. Nothing has to be typed in by hand.
+- **Either end can drive a server** — a server folder carries its own console, so a
+  server started by the copy of Niksnaks-Hosting on the other computer still shows up
+  here as running, still streams its log, still takes console commands, and still stops
+  from here. It works the other way round too: a server this app started on another
+  machine can be watched and stopped from the app running on that machine. Server
+  pictures live in the server folder as well, so both ends show the same one.
 
 ### Mods, modpacks & worlds
 

@@ -17,6 +17,7 @@ from gi.repository import Adw, GLib, Gtk
 from niksnaks_hosting.gtk_ui.dialogs.progress_dialog import ProgressDialog
 from niksnaks_hosting.shared.backend.server_manager import ServerInfo, ServerManager
 from niksnaks_hosting.shared.utils.constants import LOADER_NEOFORGE, get_loader_display_name, is_bedrock
+from niksnaks_hosting.shared.remote.paths import is_remote
 from niksnaks_hosting.shared.utils.deletion import (
     TRASH_DIR_NAME,
     delete_registered,
@@ -620,6 +621,32 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
         d.mkdir(parents=True, exist_ok=True)
         return d
 
+    def _is_remote(self) -> bool:
+        return bool(self._server_info and self._server_info.is_remote)
+
+    @staticmethod
+    def _move_within_server(source, target) -> None:
+        """Move a file or folder inside one server, wherever that server is.
+
+        Both ends are under the same server folder, so on a host this is one SFTP
+        rename rather than a copy. shutil would be the wrong tool there twice over: it
+        cannot take a RemotePath at all, and turning one into a str would have it move
+        whatever happens to sit at that path on *this* computer.
+        """
+        if is_remote(source):
+            source.rename(target)
+            return
+        shutil.move(str(source), str(target))
+
+    def _erase_for_good(self, trashed) -> None:
+        """Delete what the undo window has run out on, on whichever machine it is."""
+        info = self._server_info
+        if info is not None and info.is_remote:
+            host = info.host
+            host.ops.remove_tree(host, str(trashed))
+            return
+        delete_registered(trashed)
+
     def _soft_delete_with_undo(
         self,
         target: Path,
@@ -635,16 +662,19 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
 
         trash_name = f"{target.name}.{uuid.uuid4().hex}.trash"
         trashed = trash_dir / trash_name
+        remote = self._is_remote()
 
         try:
-            shutil.move(str(target), str(trashed))
-        except OSError as e:
+            self._move_within_server(target, trashed)
+        except Exception as e:
             self._alert(_("Could not delete"), str(e))
             return
 
-        # Journaled so that quitting during the undo window still ends in deletion,
-        # on the way out or at the next launch.
-        register_pending_deletion(trashed)
+        if not remote:
+            # Journaled so that quitting during the undo window still ends in deletion,
+            # on the way out or at the next launch. Only for this computer's disk: the
+            # journal is a list of local paths, and a path on a host means nothing to it.
+            register_pending_deletion(trashed)
 
         state = {"undone": False}
 
@@ -652,7 +682,8 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
             if state["undone"]:
                 return
             state["undone"] = True
-            unregister_pending_deletion(trashed)
+            if not remote:
+                unregister_pending_deletion(trashed)
             try:
                 restore_target = target
                 restore_target.parent.mkdir(parents=True, exist_ok=True)
@@ -661,19 +692,25 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
                     restore_target = restore_target.with_name(
                         f"{restore_target.stem}-restored-{stamp}{restore_target.suffix}"
                     )
-                shutil.move(str(trashed), str(restore_target))
+                self._move_within_server(trashed, restore_target)
                 on_refresh()
                 self._toast(_("Restored {}").format(label))
-            except OSError as e:
+            except Exception as e:
                 self._alert(_("Could not undo"), str(e))
 
         def finalize_delete():
             if state["undone"]:
                 return False
-            # A world can be gigabytes; deleting it on the main thread would hang
-            # the interface, and the plain delete it replaced quietly left
-            # read-only and still-locked files behind on Windows.
-            threading.Thread(target=delete_registered, args=(trashed,), daemon=True).start()
+
+            # A world can be gigabytes; deleting it on the main thread would hang the
+            # interface, and on a host it is a walk of the folder over SSH besides.
+            def erase() -> None:
+                try:
+                    self._erase_for_good(trashed)
+                except Exception:
+                    pass
+
+            threading.Thread(target=erase, daemon=True).start()
 
             if on_finalize:
                 try:

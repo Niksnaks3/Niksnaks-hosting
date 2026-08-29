@@ -14,10 +14,11 @@ from niksnaks_hosting.shared.backend.playit_config import load_playit_config
 from niksnaks_hosting.shared.backend.server_manager import ServerManager
 from niksnaks_hosting.shared.utils.constants import APP_ID
 
-# How often the machines that hold remote servers are asked what they are running. Slow
-# on purpose: a server that starts over there is not urgent news, and every round costs
-# an SSH round trip per server -- or a connect timeout for a host that has gone away.
-REMOTE_REFRESH_SECONDS = 20
+# How often every machine holding a server -- this one included -- is asked what it is
+# actually running. Slow on purpose: a server somebody else started is not urgent news,
+# and every round costs an SSH round trip per remote server, or a connect timeout for a
+# host that has gone away.
+STATE_REFRESH_SECONDS = 20
 
 class NiksnaksHostingWindow(Adw.ApplicationWindow):
     def __init__(self, server_manager: ServerManager, **kwargs):
@@ -25,7 +26,7 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         self._server_manager = server_manager
         self._current_server_id = None
         self._status_poll_id = None
-        self._remote_poll_id = None
+        self._state_poll_id = None
         self._running_server_ids: set[str] = set(self._server_manager.get_running_server_ids())
         self._playit_starting_server_ids: set[str] = set()
         self._playit_autostart_paused_ids: set[str] = set()
@@ -105,13 +106,14 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
 
         self._status_poll_id = GLib.timeout_add(1000, self._poll_runtime_state)
 
-        # Servers on another computer keep running while this app is closed, and can be
-        # started from over there while it is open, so their state is asked for rather
-        # than assumed: once now, so the list is right as soon as it appears, and then
-        # on a slow timer. The work happens on threads; nothing here waits for it.
-        server_manager.refresh_remote_states()
-        self._remote_poll_id = GLib.timeout_add_seconds(
-            REMOTE_REFRESH_SECONDS, self._poll_remote_states
+        # A server keeps running while this app is closed and can be started from
+        # somewhere else while it is open -- from another computer over SSH, or by
+        # another copy of this app on this one -- so its state is asked for rather than
+        # assumed: once now, so the list is right as soon as it appears, and then on a
+        # slow timer. The work happens on threads; nothing here waits for it.
+        server_manager.refresh_server_states()
+        self._state_poll_id = GLib.timeout_add_seconds(
+            STATE_REFRESH_SECONDS, self._poll_server_states
         )
 
         self._quit_requested = False
@@ -246,12 +248,12 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         if self._status_poll_id:
             GLib.source_remove(self._status_poll_id)
             self._status_poll_id = None
-        if self._remote_poll_id:
-            GLib.source_remove(self._remote_poll_id)
-            self._remote_poll_id = None
+        if self._state_poll_id:
+            GLib.source_remove(self._state_poll_id)
+            self._state_poll_id = None
 
-    def _poll_remote_states(self):
-        self._server_manager.refresh_remote_states()
+    def _poll_server_states(self):
+        self._server_manager.refresh_server_states()
         return True
 
     def _poll_runtime_state(self):

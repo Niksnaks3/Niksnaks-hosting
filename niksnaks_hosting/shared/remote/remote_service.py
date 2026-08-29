@@ -15,11 +15,17 @@ import re
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from niksnaks_hosting.shared.utils.constants import CONSOLE_IN_FILE, CONSOLE_LOG_FILE
+
 # One unit or task per server, named so a person reading `systemctl --user list-units` or
 # `schtasks /Query` can tell what it is and the app can find its own again.
 UNIT_PREFIX = "niksnaks-"
 
-CONSOLE_LOG = "console.log"
+# The same two files a server started on this computer keeps, so a folder's console
+# reads and writes the same way whichever machine and whichever copy of the app started
+# what is running in it. Named here as well, because everything remote imports it from.
+CONSOLE_LOG = CONSOLE_LOG_FILE
+CONSOLE_IN = CONSOLE_IN_FILE
 
 # Long enough for a big modded world to finish writing itself out. A server killed part
 # way through that is a corrupted region file, so this errs high on purpose.
@@ -102,8 +108,13 @@ class RemoteService(Protocol):
     # ---------------------------------------------------------------------- state
     def state(self) -> UnitState: ...
 
-    def follow_console(self) -> Any:
-        """A paramiko channel streaming the console log as it is written."""
+    def follow_console(self, tail_lines: int = 0) -> Any:
+        """A paramiko channel streaming the console log as it is written.
+
+        *tail_lines* is how much of what is already there to replay first: none after a
+        start, which truncates the log, and a screenful when picking up a server that
+        was running before the app opened.
+        """
 
     def read_console_tail(self, lines: int = 1000) -> str: ...
 
@@ -115,6 +126,17 @@ class RemoteService(Protocol):
         plain child process is invisible to state() -- and is exactly the collision worth
         refusing. Returns 0 when the folder is free.
         """
+
+    def send_console_file(self, line: str) -> None:
+        """Type a line into a server in this folder that this service did not start.
+
+        send_console() addresses the unit or task: its FIFO, its stdin file, its RCON
+        port. None of those exist for a process something else launched, but the folder
+        still has an inbox, and the copy of this app that did start it is watching that.
+        """
+
+    def pid_alive(self, pid: int) -> bool:
+        """Whether one process is still running on the host, whoever started it."""
 
 
 def as_int(value: str | None) -> int:

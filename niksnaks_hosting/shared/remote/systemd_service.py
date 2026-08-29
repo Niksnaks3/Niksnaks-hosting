@@ -4,6 +4,7 @@ import shlex
 from typing import TYPE_CHECKING
 
 from niksnaks_hosting.shared.remote.remote_service import (
+    CONSOLE_IN,
     CONSOLE_LOG,
     STOP_GRACE_SECONDS,
     UNIT_PREFIX,
@@ -31,7 +32,10 @@ __all__ = [
 # Minecraft answers "stop" on stdin, and systemd cannot type it. The unit keeps a FIFO
 # open as the process's stdin so the app can push console commands into it, and stopping
 # writes "stop" there rather than sending a signal, so the world is saved on the way out.
-STDIN_FIFO = "console.in"
+# The same name a server started by a copy of this app uses for its inbox, so appending
+# to it reaches the server either way -- straight down its stdin when a unit of ours is
+# holding the FIFO, and via the app that started it when it is a plain file.
+STDIN_FIFO = CONSOLE_IN
 
 
 class SystemdService:
@@ -134,12 +138,43 @@ WantedBy=default.target
         return []
 
     def send_console(self, line: str) -> None:
-        """Type a line into the running server's console."""
+        """Type a line into the running server's console.
+
+        Appended rather than written over: for the FIFO one of our own units holds open
+        the two are the same thing, but for the plain file a copy of this app uses when
+        it runs the server itself, overwriting would drop a command sent a moment ago
+        that had not been picked up yet.
+        """
         text = line.rstrip("\n") + "\n"
         self.host.run_shell(
-            f"printf %s {shlex.quote(text)} > {shlex.quote(self.fifo_path)}",
+            f"printf %s {shlex.quote(text)} >> {shlex.quote(self.fifo_path)}",
             timeout=20,
         )
+
+    def send_console_file(self, line: str) -> None:
+        # One inbox, whoever is running the server: there is nothing to do differently.
+        self.send_console(line)
+
+    def pid_alive(self, pid: int) -> bool:
+        """Whether a process on the host is still doing anything.
+
+        A zombie is deliberately not alive, which rules out `kill -0`: a server started
+        by the far machine's own copy of this app is that app's child and stays in the
+        process table until it is reaped, so a stop would go on waiting long after the
+        world had been written out and the process had exited.
+        """
+        script = (
+            f"state=$(ps -o stat= -p {int(pid)} 2>/dev/null | head -n1); "
+            '[ -n "$state" ] || exit 1; '
+            'case "$state" in Z*) exit 1 ;; esac; '
+            "exit 0"
+        )
+        try:
+            return self.host.run_shell(script, timeout=20).ok
+        except Exception:
+            # No answer is not evidence the process has gone, and saying it has would
+            # have the app report a running server as stopped every time the link blips.
+            return True
 
     # ---------------------------------------------------------------------- state
     def state(self) -> UnitState:
@@ -167,12 +202,17 @@ WantedBy=default.target
             cpu_seconds=as_int(values.get("CPUUsageNSec")) / 1_000_000_000,
         )
 
-    def follow_console(self):
-        """A channel streaming the console log as it is written."""
-        # The log is truncated on every start, so --follow from the top of the current
-        # file replays this run and then keeps pace with it.
+    def follow_console(self, tail_lines: int = 0):
+        """A channel streaming the console log as it is written.
+
+        With no *tail_lines* this starts from the top of the file, which is right after
+        a start: the log is truncated there, so the whole file is this run. Picking up a
+        server that was already going asks for a screenful instead, because that file
+        can be days long and none of it has been shown yet.
+        """
+        where = f"-n {int(tail_lines)}" if tail_lines else "-n +1"
         return self.host.connection.open_stream(
-            f"tail -n +1 -F {shlex.quote(self.log_path)} 2>/dev/null"
+            f"tail {where} -F {shlex.quote(self.log_path)} 2>/dev/null"
         )
 
     def read_console_tail(self, lines: int = 1000) -> str:

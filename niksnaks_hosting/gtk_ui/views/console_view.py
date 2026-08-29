@@ -89,6 +89,13 @@ class ConsoleView(Gtk.Box):
 
         self._process = process
         if process:
+            # Whatever the server has already said, before this view existed. A server
+            # on another computer has usually been running a while by the time anyone
+            # clicks on it -- its console is picked up from the folder at startup -- and
+            # without this the tab sits empty until the server happens to print again.
+            history = "".join(process.log_history)
+            if history:
+                self.append_text(history)
             self._output_handler_id = process.connect("output-received", self._on_output_received)
 
     def clear(self):
@@ -180,8 +187,11 @@ class ConsoleView(Gtk.Box):
             return
 
         if self._process:
-
-            self.append_text(f"> {text}\n")
+            # Not echoed when the server is being run by another copy of this app: that
+            # copy types the command in and says so in the console both are reading, so
+            # echoing here too would show it twice a second apart.
+            if not getattr(self._process, "command_echoes_back", False):
+                self.append_text(f"> {text}\n")
             self._process.send_command(text)
         else:
             self.append_text(_("[Niksnaks-Hosting] No server process connected\n"))

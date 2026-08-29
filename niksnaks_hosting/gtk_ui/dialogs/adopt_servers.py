@@ -19,6 +19,27 @@ from niksnaks_hosting.shared.remote.remote_adopt import (
 )
 
 
+def offer_adopt_if_any(parent, manager, host) -> None:
+    """Ask the host what it is already running, and only speak up if the answer is yes.
+
+    The moment worth asking is right after a machine has been added: if a copy of this
+    app over there is already looking after servers, those are almost certainly what the
+    user came to reach, and nobody should have to find a folder path to get at them.
+    Silent when the far machine has no install, so adding a bare host stays one step.
+    """
+
+    def worker() -> None:
+        try:
+            found, _where = discover_remote_servers(manager, host)
+        except Exception:
+            return
+        if not [candidate for candidate in found if candidate.importable]:
+            return
+        GLib.idle_add(lambda: (show_adopt_dialog(parent, manager, host), False)[1])
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
 def show_adopt_dialog(parent, manager, host, on_done=None) -> None:
     """Ask the host what it is running, then let the user choose what to take on."""
     dialog = Adw.AlertDialog()

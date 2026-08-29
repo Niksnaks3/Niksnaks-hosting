@@ -18,7 +18,7 @@ from niksnaks_hosting.shared.backend.java_manager import JavaManager
 from niksnaks_hosting.shared.backend.playit_config import load_playit_config
 from niksnaks_hosting.shared.backend.playit_manager import PlayitManager
 from niksnaks_hosting.shared.backend.preferences_manager import PreferencesManager
-from niksnaks_hosting.shared.backend.server_process import ServerProcess
+from niksnaks_hosting.shared.backend.server_process import ServerProcess, running_server_pids
 from niksnaks_hosting.shared.core.events import EventEmitter
 from niksnaks_hosting.shared.utils.constants import (
     BEDROCK_BINARY_NAMES,
@@ -35,6 +35,7 @@ from niksnaks_hosting.shared.utils.constants import (
     MAX_SERVER_PORT,
     MIN_SERVER_PORT,
     SERVERS_DIR,
+    USER_ICON_FILE,
     default_port_for_edition,
     get_forge_full_version,
     get_required_java_version,
@@ -236,6 +237,9 @@ class ServerManager(EventEmitter):
         self._processes: dict[str, ServerProcess] = {}
         self._mods_operation_counts: dict[str, int] = {}
         self._remote_java: dict[str, object] = {}
+        # A server's picture lives in its folder, which for a remote one is an SFTP read
+        # per look. The sidebar looks every time a row is rebuilt, so the answer is kept.
+        self._icon_cache: dict[str, bytes] = {}
         # Held for the length of one sweep over the remote servers, so a slow host
         # cannot leave rounds of it running on top of each other.
         self._remote_refresh = threading.Semaphore(1)
@@ -347,19 +351,72 @@ class ServerManager(EventEmitter):
             self._save()
             self.emit_on_main_thread("server-changed", server_id)
 
-    def set_server_icon(self, server_id: str, icon_path: str):
+    def set_server_icon(self, server_id: str, source_image: str) -> tuple[bool, str]:
+        """Give a server its picture, in its own folder, on whichever machine that is.
+
+        The picture belongs with the server rather than in this app's own storage: that
+        is what makes it show up in every copy of this app that can see the folder, and
+        it is the same place Minecraft looks for the one it puts in the multiplayer list.
+        """
         info = self._servers.get(server_id)
         if not info:
-            return
-        info.icon_path = icon_path
-        try:
-            from niksnaks_hosting.shared.utils.image_utils import write_minecraft_server_icon
+            return False, _("Server not found.")
 
-            write_minecraft_server_icon(icon_path, info.server_dir)
+        from niksnaks_hosting.shared.utils.image_utils import png_bytes, write_minecraft_server_icon
+
+        try:
+            picture = info.server_dir / USER_ICON_FILE
+            picture.parent.mkdir(parents=True, exist_ok=True)
+            picture.write_bytes(png_bytes(source_image, 128))
+        except Exception as e:
+            return False, _("Could not save the picture: {}").format(e)
+
+        # Minecraft's own copy is worth having but not worth failing over: a host that
+        # took the first write will take this one, and a pack may overwrite it anyway.
+        try:
+            write_minecraft_server_icon(source_image, info.server_dir)
         except Exception:
             pass
+
+        info.icon_path = str(picture)
+        self._icon_cache.pop(server_id, None)
         self._save()
         self.emit_on_main_thread("server-changed", server_id)
+        return True, ""
+
+    def icon_bytes(self, info: ServerInfo) -> bytes:
+        """A server's picture as bytes, read from its own folder wherever that is.
+
+        The path written in servers.json is a path on the machine the server lives on,
+        which for a server on another computer names a file this one has not got --
+        reading the folder instead is the same code for both. Remembered once per
+        server, because the sidebar asks again every time a player joins or leaves and
+        the answer only changes when this app is the thing that changes it.
+        """
+        cached = self._icon_cache.get(info.id)
+        if cached is not None:
+            return cached
+
+        try:
+            picture = info.server_dir / USER_ICON_FILE
+            data = picture.read_bytes() if picture.is_file() else b""
+        except Exception:
+            # The machine could not be asked, which is not the same as there being no
+            # picture. Remembering "none" here would leave the row blank for the rest
+            # of the run even once the computer came back.
+            return b""
+
+        if not data and info.icon_path and not info.is_remote:
+            # An older release could put the picture outside the server folder.
+            try:
+                stored = Path(info.icon_path)
+                if stored.is_file():
+                    data = stored.read_bytes()
+            except OSError:
+                return b""
+
+        self._icon_cache[info.id] = data
+        return data
 
     def get_autostart_servers(self) -> list[ServerInfo]:
         return [server for server in self._servers.values() if server.autostart]
@@ -455,6 +512,19 @@ class ServerManager(EventEmitter):
 
         if is_bedrock(info.edition):
             return False, _("Use the Bedrock updater for Bedrock Edition servers")
+
+        if info.is_remote:
+            # Everything below runs on this computer: it downloads the installer here,
+            # runs it with this machine's Java, and writes the result to this disk. Worse,
+            # it clears the old loader out of the server folder first -- which for a
+            # remote server is the host's folder, and really would be emptied. Refusing
+            # up front is the only safe answer until this is routed through the host the
+            # way the create-server wizard already routes a first install.
+            return False, _(
+                "Changing the Minecraft version of a server on {} is not supported yet. "
+                "Its mods and worlds would have to be rebuilt on that computer, and this "
+                "app can only do that here. Nothing has been changed."
+            ).format(info.host.name)
 
         process = self._processes.get(server_id)
         if process and process.is_running:
@@ -627,13 +697,29 @@ class ServerManager(EventEmitter):
             return False, _("Server not found")
 
         if info.is_remote:
-            # BedrockManager downloads and unpacks on this computer. Putting a Bedrock
-            # server on a host is a different job -- the host fetches its own zip, for
-            # its own platform -- and only the create-server wizard does it today.
-            return False, _(
-                "Reinstalling the Bedrock server files on {} is not supported yet. Create the "
-                "server again on that computer, or replace the files there by hand."
-            ).format(info.host.name)
+            # BedrockManager downloads and unpacks on this computer, which is the wrong
+            # disk entirely. The host fetches its own zip, for its own platform, and
+            # unpacks it itself -- the same path the create-server wizard uses.
+            from niksnaks_hosting.shared.remote.remote_install import install_remote_bedrock
+
+            try:
+                install_remote_bedrock(
+                    info.host,
+                    str(info.server_dir),
+                    option,
+                    progress=progress_callback,
+                    keep_existing_config=keep_existing_config,
+                )
+            except Exception as e:
+                return False, _("Could not install the Bedrock server on {}: {}").format(
+                    info.host.name, e
+                )
+
+            info.mc_version = option.version
+            info.edition = EDITION_BEDROCK
+            self._save()
+            self.emit_on_main_thread("server-changed", server_id)
+            return True, _("Bedrock server {} installed on {}.").format(option.version, info.host.name)
 
         ok, msg = self.bedrock_manager.install(
             option,
@@ -672,10 +758,21 @@ class ServerManager(EventEmitter):
             if progress_callback:
                 progress_callback(frac, msg)
 
-        progress(0.02, _("Creating full backup"))
-        backup_ok, backup_msg = self.create_full_backup(server_id)
-        if not backup_ok:
-            return False, _("Could not create full backup before updating: {}").format(backup_msg)
+        # Backups are written to this computer's disk from this computer's disk, so
+        # there is no backup to take for a server on another machine. Said in the result
+        # rather than skipped quietly, and rather than refusing the update: the package
+        # leaves worlds/ alone and the settings files are put back after it.
+        unbacked = ""
+        if info.is_remote:
+            unbacked = _(
+                " No full backup was taken first: backing up a server on another computer"
+                " is not supported yet."
+            )
+        else:
+            progress(0.02, _("Creating full backup"))
+            backup_ok, backup_msg = self.create_full_backup(server_id)
+            if not backup_ok:
+                return False, _("Could not create full backup before updating: {}").format(backup_msg)
 
         # Worlds live under worlds/ and are untouched by the package; server.properties,
         # allowlist.json and permissions.json are kept so settings survive the update.
@@ -689,7 +786,22 @@ class ServerManager(EventEmitter):
             return False, msg
 
         progress(1.0, _("Server runtime updated"))
-        return True, _("Updated to Bedrock {}.").format(option.version)
+        return True, _("Updated to Bedrock {}.").format(option.version) + unbacked
+
+    def bedrock_versions(self, info: ServerInfo) -> list[BedrockVersionOption]:
+        """The Bedrock builds available for the machine this server lives on.
+
+        Not this computer's: the version numbers match across platforms but the
+        downloads do not, and handing a Windows host a Linux tarball's URL installs
+        nothing it can run.
+        """
+        platform = ""
+        if info.is_remote:
+            try:
+                platform = info.host.ops.platform
+            except Exception:
+                platform = ""
+        return self.bedrock_manager.fetch_versions(platform)
 
     def bedrock_binary_name(self, info: ServerInfo) -> str:
         """What the machine this server lives on calls the Bedrock executable.
@@ -747,7 +859,7 @@ class ServerManager(EventEmitter):
 
         if option is None:
             progress(0.0, _("Looking up the Bedrock server..."))
-            options = self.bedrock_manager.fetch_versions()
+            options = self.bedrock_versions(info)
             option = next((entry for entry in options if not entry.preview), options[0] if options else None)
         if not option:
             return False, _("Could not reach the Bedrock server download page")
@@ -766,7 +878,8 @@ class ServerManager(EventEmitter):
         if foreign:
             foreign.unlink(missing_ok=True)
 
-        return True, _("Installed Bedrock server {} for this computer.").format(option.version)
+        where = info.host.name if info.is_remote else _("this computer")
+        return True, _("Installed Bedrock server {} for {}.").format(option.version, where)
 
     def _json_file(self, path: Path) -> dict:
         try:
@@ -1504,7 +1617,7 @@ class ServerManager(EventEmitter):
                     config.load()
                     max_players = config.get_int("max-players", default_max_players)
 
-                self._processes[server_id] = ServerProcess(
+                process = ServerProcess(
                     server_dir=str(info.server_dir),
                     java_path=java_path,
                     ram_mb=info.ram_mb,
@@ -1513,6 +1626,12 @@ class ServerManager(EventEmitter):
                     loader_type=info.loader_type,
                     edition=info.edition,
                 )
+                self._processes[server_id] = process
+                # This folder may already have a server running in it that this app did
+                # not start -- another copy of it here, or a unit a copy on another
+                # computer wrote onto this machine. Scanning the process table is not
+                # main-thread work, and the row can catch up when the answer lands.
+                threading.Thread(target=process.adopt_running_state, daemon=True).start()
 
         return self._processes[server_id]
 
@@ -1537,12 +1656,15 @@ class ServerManager(EventEmitter):
                 # on a server whose state has already been established.
                 pass
 
-    def refresh_remote_states(self) -> None:
-        """Ask the hosts which of their servers are up, without holding up the app.
+    def refresh_server_states(self) -> None:
+        """Ask every machine which of its servers are up, without holding up the app.
 
-        A server on another computer is never something this app can remember the state
-        of: it keeps running while the app is closed, and it can be started from over
-        there while the app is open. So the answer is asked for, and asked for again.
+        A server's state is never something this app can simply remember. One on another
+        computer keeps running while the app is closed and can be started from over
+        there while it is open; one on this computer can just as easily have been started
+        by another copy of this app, or by a unit that a copy on another computer wrote
+        onto this machine over SSH. Either way the answer is asked for, and asked for
+        again.
 
         One worker for the whole sweep, and never two at once: a host that has gone away
         holds each of its servers up for a connect timeout, and rounds that overlapped
@@ -1551,19 +1673,25 @@ class ServerManager(EventEmitter):
         if not self._remote_refresh.acquire(blocking=False):
             return
 
-        remote_ids = [info.id for info in self.servers if info.is_remote]
-        if not remote_ids:
+        server_ids = [info.id for info in self.servers]
+        if not server_ids:
             self._remote_refresh.release()
             return
 
         def worker() -> None:
             try:
-                for server_id in remote_ids:
+                # One walk of this machine's processes for the whole sweep, rather than
+                # one per local server; every refresh_state below reads the same answer.
+                try:
+                    running_server_pids(fresh=True)
+                except Exception:
+                    pass
+                for server_id in server_ids:
                     process = self.get_existing_process(server_id)
                     try:
                         if process is None:
-                            # Making the process is itself what asks the host, so there
-                            # is nothing more to do for one that was not there yet.
+                            # Making the process is itself what asks, so there is
+                            # nothing more to do for one that was not there yet.
                             self.get_process(server_id)
                         else:
                             process.refresh_state()

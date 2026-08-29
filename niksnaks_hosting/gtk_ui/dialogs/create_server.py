@@ -51,7 +51,6 @@ from niksnaks_hosting.shared.utils.constants import (
     normalize_loader,
     uses_installer,
 )
-from niksnaks_hosting.shared.utils.image_utils import convert_to_png
 
 FABRIC_OPTIMISATION_MODS = [
     ("lithium", _("Lithium")),
@@ -1438,9 +1437,10 @@ class CreateServerDialog(Adw.Dialog):
             if icon_source_path:
                 self._update_progress(0.95, _("Applying server icon..."), "")
                 try:
-                    icon_output = server_info.server_dir / "icon.png"
-                    convert_to_png(icon_source_path, str(icon_output), size=128)
-                    self._server_manager.set_server_icon(server_info.id, str(icon_output))
+                    # The manager converts it and puts it in the server's own folder,
+                    # which for a server on a host is on that host: writing it here
+                    # first would only ever land on this computer's disk.
+                    self._server_manager.set_server_icon(server_info.id, icon_source_path)
                 except Exception:
                     pass
 
@@ -1506,9 +1506,10 @@ class CreateServerDialog(Adw.Dialog):
             if icon_source_path:
                 self._update_progress(0.95, _("Applying server icon..."), "")
                 try:
-                    icon_output = server_info.server_dir / "icon.png"
-                    convert_to_png(icon_source_path, str(icon_output), size=128)
-                    self._server_manager.set_server_icon(server_info.id, str(icon_output))
+                    # The manager converts it and puts it in the server's own folder,
+                    # which for a server on a host is on that host: writing it here
+                    # first would only ever land on this computer's disk.
+                    self._server_manager.set_server_icon(server_info.id, icon_source_path)
                 except Exception:
                     pass
 
@@ -1795,9 +1796,10 @@ class CreateServerDialog(Adw.Dialog):
             if icon_source_path:
                 self._update_progress(0.92, _("Applying server icon..."), "")
                 try:
-                    icon_output = server_info.server_dir / "icon.png"
-                    convert_to_png(icon_source_path, str(icon_output), size=128)
-                    self._server_manager.set_server_icon(server_info.id, str(icon_output))
+                    # The manager converts it and puts it in the server's own folder,
+                    # which for a server on a host is on that host: writing it here
+                    # first would only ever land on this computer's disk.
+                    self._server_manager.set_server_icon(server_info.id, icon_source_path)
                 except Exception:
                     pass
 

@@ -127,6 +127,10 @@ class RemotePath:
         info = self._fs.lstat(str(self))
         return info is not None and stat_module.S_ISLNK(info.st_mode)
 
+    def is_fifo(self) -> bool:
+        info = self._fs.lstat(str(self))
+        return info is not None and stat_module.S_ISFIFO(info.st_mode)
+
     def stat(self) -> Any:
         info = self._fs.stat(str(self))
         if info is None:

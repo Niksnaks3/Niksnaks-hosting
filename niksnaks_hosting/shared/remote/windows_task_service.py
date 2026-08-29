@@ -352,6 +352,25 @@ class WindowsTaskService:
             existing += b"\n"
         path.write_bytes(existing + text.encode("utf-8") + b"\n")
 
+    def send_console_file(self, line: str) -> None:
+        """Type into a server in this folder that this task did not start.
+
+        Straight to the inbox, never RCON: the console port belongs to a server this
+        task launched and configured, and a process something else started is not
+        listening on it -- but it is watching this file, because it is the same file
+        this app's launcher would be watching.
+        """
+        text = line.strip()
+        if text:
+            self._append_stdin(text)
+
+    def pid_alive(self, pid: int) -> bool:
+        try:
+            return self._tasklist(int(pid)) is not None
+        except Exception:
+            # Losing the link is not evidence the process has gone.
+            return True
+
     def _is_bedrock(self) -> bool:
         """Whether this folder holds a Bedrock server, which has no RCON to speak to."""
         if self._bedrock is None:
@@ -387,20 +406,23 @@ class WindowsTaskService:
             cpu_seconds=cpu,
         )
 
-    def follow_console(self) -> Any:
-        """Stream the console log, replaying what this run has already printed.
+    def follow_console(self, tail_lines: int = 0) -> Any:
+        """Stream the console log, replaying what is already in it first.
 
-        Get-Content -Wait prints the whole file and then keeps pace with it, which is
-        what `tail -n +1 -F` does on the other side. The log is truncated at every start,
-        so the whole file is exactly this run.
+        Get-Content -Wait prints the file and then keeps pace with it, which is what
+        `tail -F` does on the other side. With no *tail_lines* the whole file goes out,
+        which is right after a start because the log is truncated there; picking up a
+        server that was already running asks for a screenful of a file that may be days
+        long instead.
         """
         self.ops.sweep_scripts(self.host)
+        window = f" -Tail {int(tail_lines)}" if tail_lines else ""
         body = f"""$log = {ps_quote(self.ops.to_native(self.log_path))}
 for ($i = 0; $i -lt 60; $i++) {{
     if (Test-Path -LiteralPath $log) {{ break }}
     Start-Sleep -Milliseconds 500
 }}
-Get-Content -LiteralPath $log -Encoding utf8 -Wait"""
+Get-Content -LiteralPath $log -Encoding utf8{window} -Wait"""
         return self.ops.open_script_stream(self.host, body)
 
     def read_console_tail(self, lines: int = 1000) -> str:

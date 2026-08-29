@@ -197,6 +197,7 @@ def install_remote_bedrock(
     server_dir: str,
     option,
     progress: ProgressFn | None = None,
+    keep_existing_config: bool = False,
 ) -> None:
     """Put a Bedrock server on a host. No Java, no loader -- one zip and a binary.
 
@@ -204,13 +205,30 @@ def install_remote_bedrock(
     megabytes, and there is no reason for it to travel to this machine first. Which zip
     depends on the host's own platform, not this one's, which is why the caller has to
     have asked BedrockManager for that platform's build.
+
+    With *keep_existing_config* this is an update rather than a first install: the
+    package ships its own default server.properties and allow-lists, and unpacking over
+    the top would quietly reset the server's name, port and operators. They are small
+    files, so they are held here across the unpack and put back afterwards -- which is
+    the same thing BedrockManager.install does locally by skipping those members, and
+    cannot be done that way here because the host does its own unpacking.
     """
-    from niksnaks_hosting.shared.backend.bedrock_manager import BEDROCK_USER_AGENT
+    from niksnaks_hosting.shared.backend.bedrock_manager import BEDROCK_PRESERVED_FILES, BEDROCK_USER_AGENT
 
     ops = host.ops
     root = host.path(server_dir)
     root.mkdir(parents=True, exist_ok=True)
     archive = f"{server_dir}/bedrock-server.zip"
+
+    preserved: dict[str, bytes] = {}
+    if keep_existing_config:
+        for name in BEDROCK_PRESERVED_FILES:
+            try:
+                existing = root / name
+                if existing.is_file():
+                    preserved[name] = existing.read_bytes()
+            except Exception:
+                continue
 
     if progress:
         progress(0.0, _("Downloading Bedrock {} on {}").format(option.version, host.name))
@@ -241,6 +259,15 @@ def install_remote_bedrock(
             _("The Bedrock server was unpacked on {} but its program is not in it.").format(host.name)
         )
     ops.make_executable(host, host.to_native(binary))
+
+    for name, data in preserved.items():
+        try:
+            (root / name).write_bytes(data)
+        except Exception:
+            # The server still runs; it has the package's defaults for this one file,
+            # which is worth far less than failing the whole update over.
+            continue
+
     if progress:
         progress(1.0, _("Bedrock {} ready").format(option.version))
 
