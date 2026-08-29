@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import getpass
+import socket
 import threading
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, GLib, Gtk
+gi.require_version("Gdk", "4.0")
+from gi.repository import Adw, Gdk, GLib, Gtk
 
 from niksnaks_hosting.gtk_ui.dialogs.host_password import ask_host_password
 from niksnaks_hosting.gtk_ui.host_form import (
@@ -17,6 +20,8 @@ from niksnaks_hosting.gtk_ui.host_form import (
 )
 from niksnaks_hosting.shared.remote.hosts_manager import HostsManager
 from niksnaks_hosting.shared.remote.ssh_client import SshError
+
+SSH_PORT = 22
 
 
 def show_hosts_dialog(parent: Gtk.Window, hosts: HostsManager, manager=None) -> None:
@@ -109,8 +114,134 @@ def show_hosts_dialog(parent: Gtk.Window, hosts: HostsManager, manager=None) -> 
         rows.append(add_row)
 
     rebuild()
+    page.add(_this_computer_group(dialog))
     dialog.add(page)
     dialog.present(parent)
+
+
+# --------------------------------------------------------------- this computer
+def _local_address() -> str:
+    """The address another machine on this network would reach this computer at.
+
+    Asking a socket which of this computer's addresses it would leave by is the only
+    reliable answer on a machine with several -- a VPN, a docker bridge, two cards.
+    Nothing is actually sent; a UDP connect only picks the route.
+    """
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.connect(("8.8.8.8", 80))
+        ip = sock.getsockname()[0]
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+    try:
+        ip = socket.gethostbyname(socket.gethostname())
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+    return ""
+
+
+def _ssh_is_listening() -> bool:
+    """Whether anything answers on this computer's SSH port.
+
+    Flatpak shares the host's network namespace, so 127.0.0.1 in here is the machine
+    the app runs on rather than the sandbox, and this says something true about it.
+    """
+    sock = socket.socket()
+    sock.settimeout(1.5)
+    try:
+        sock.connect(("127.0.0.1", SSH_PORT))
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
+def _copy_row(dialog: Adw.PreferencesDialog, title: str, value: str, copied: str) -> Adw.ActionRow:
+    """One detail to read off or copy, with the copy button doubling as the row action."""
+    shown = value or _("Not available")
+    row = Adw.ActionRow(title=title, subtitle=shown)
+
+    if not value:
+        return row
+
+    def copy(*_args) -> None:
+        display = Gdk.Display.get_default()
+        if display is None:
+            dialog.add_toast(Adw.Toast(title=_("Could not access clipboard")))
+            return
+        display.get_clipboard().set(value)
+        dialog.add_toast(Adw.Toast(title=copied))
+
+    button = Gtk.Button(icon_name="edit-copy-symbolic", valign=Gtk.Align.CENTER)
+    button.add_css_class("flat")
+    button.set_tooltip_text(_("Copy"))
+    button.connect("clicked", copy)
+    row.add_suffix(button)
+    row.set_activatable(True)
+    row.connect("activated", copy)
+    return row
+
+
+def _this_computer_group(dialog: Adw.PreferencesDialog) -> Adw.PreferencesGroup:
+    """What to hand somebody who wants to run their servers on this machine.
+
+    The mirror of the group above: those are machines this app reaches out to, this is
+    what another copy of the app has to type to reach in.
+    """
+    group = Adw.PreferencesGroup(
+        title=_("This computer"),
+        description=_(
+            "Somebody else running Niksnaks-Hosting can add this machine with these "
+            "details and run their servers on it. They log in as a user account on this "
+            "computer, so they need its password once. From outside your network, port "
+            "{} also has to be forwarded to this computer."
+        ).format(SSH_PORT),
+    )
+
+    group.add(_copy_row(dialog, _("Address"), _local_address(), _("Address copied")))
+    group.add(_copy_row(dialog, _("Username"), getpass.getuser(), _("Username copied")))
+
+    ssh_row = Adw.ActionRow(title=_("SSH server"), subtitle=_("Checking…"))
+    group.add(ssh_row)
+
+    def worker() -> None:
+        listening = _ssh_is_listening()
+
+        def finish() -> bool:
+            if listening:
+                ssh_row.set_subtitle(_("Port {} · accepting connections").format(SSH_PORT))
+            else:
+                # Without this nothing else on the page is usable to anyone, so it is
+                # worth saying plainly rather than leaving them to find out by failing.
+                ssh_row.set_subtitle(
+                    _(
+                        "Nothing is listening on port {}, so nobody can connect to this "
+                        "computer yet. Turn on the OpenSSH server to allow it."
+                    ).format(SSH_PORT)
+                )
+                ssh_row.add_css_class("error")
+            return False
+
+        GLib.idle_add(finish)
+
+    threading.Thread(target=worker, daemon=True).start()
+    return group
 
 
 def _show_adopt(parent, manager, host) -> None:
