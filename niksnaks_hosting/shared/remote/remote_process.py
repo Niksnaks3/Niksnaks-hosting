@@ -333,60 +333,26 @@ class RemoteServerProcess(ServerProcess):
         timeout: float = STOP_GRACE_SECONDS,
         on_wait: Callable[[float], None] | None = None,
     ) -> bool:
-        """Stop the server and block until the host says it has finished saving.
+        """Closing this app never stops a server on another machine. Does nothing.
 
-        Signature and contract are the base class's, deliberately: quitting the app
-        calls this as stop_and_wait(on_wait=...) without knowing or caring whether the
-        server is local, and on_wait is called with the seconds spent waiting so far.
+        Signature and contract are the base class's, deliberately: quitting calls this
+        without knowing or caring where a server is. What it means, though, is the
+        opposite of what it means locally. On this computer, closing the window is the
+        last moment a world can be written out, so the base class saves it. On a host it
+        is not: the server is run by that machine's service manager, it was up before
+        this window opened, it stays up after it closes, and other people are very
+        likely playing on it. The whole point of putting a server on a host is that the
+        computer you administer it from can be closed, suspended or carried out of the
+        building without the server noticing.
+
+        Stopping and backing that server up is the job of the copy of this app on the
+        host itself, when *that* one is closed -- see ServerProcess._stop_adopted_and_wait.
+
+        ServerManager.shutdown_all_gracefully already leaves remote servers out of the
+        quit entirely; this is here so that a caller that has not learned to would still
+        do no harm.
         """
-        if not self.is_running:
-            return True
-
-        if self._foreign:
-            # Closing this app is not a reason to shut down a server it never started;
-            # it was running before the window opened and something else is looking
-            # after it. Said rather than done silently, because the shutdown screen is
-            # counting servers and this one is deliberately not among them.
-            self._emit_output(
-                f"[Niksnaks-Hosting] Leaving this server running on {self.host.name}: "
-                "it was started somewhere else, and closing this app does not stop it.\n"
-            )
-            return True
-
-        self.status = ServerStatus.STOPPING
-
-        # service.stop() blocks until the host has written the world out, so reporting
-        # elapsed time while that happens needs it on a thread of its own.
-        failure: list[str] = []
-
-        def worker() -> None:
-            try:
-                self.service.stop()
-            except Exception as e:
-                failure.append(str(e))
-
-        thread = threading.Thread(target=worker, daemon=True)
-        thread.start()
-
-        started = time.monotonic()
-        deadline = started + max(1.0, float(timeout))
-        while thread.is_alive() and time.monotonic() < deadline:
-            if on_wait:
-                on_wait(time.monotonic() - started)
-            time.sleep(0.5)
-
-        stopped_in_time = not thread.is_alive()
-        if failure:
-            self._emit_output(f"[Niksnaks-Hosting] Could not stop the server: {failure[0]}\n")
-        elif not stopped_in_time:
-            self._emit_output("[Niksnaks-Hosting] Server did not stop in time, killing...\n")
-            try:
-                self.service.kill()
-            except Exception:
-                pass
-
-        self._finish_stopped()
-        return stopped_in_time and not failure
+        return True
 
     def kill(self) -> None:
         def worker() -> None:

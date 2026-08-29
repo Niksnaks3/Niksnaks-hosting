@@ -2004,6 +2004,27 @@ class ServerManager(EventEmitter):
     def get_running_server_ids(self) -> list[str]:
         return [sid for sid, p in self._processes.items() if p.is_running]
 
+    def get_running_local_server_ids(self) -> list[str]:
+        """Running servers whose world is on this computer.
+
+        The list closing the app works from. A server on a host is deliberately not in
+        it: that machine keeps it running on its own, and the copy of this app over
+        there is what saves and backs it up when the host is finished with it. See
+        shutdown_all_gracefully.
+        """
+        ids = []
+        for server_id, process in self._processes.items():
+            if not process.is_running:
+                continue
+            info = self._servers.get(server_id)
+            if info is None or info.is_remote:
+                continue
+            ids.append(server_id)
+        return ids
+
+    def is_any_local_server_running(self) -> bool:
+        return bool(self.get_running_local_server_ids())
+
     def server_bound_ports(self, info: ServerInfo) -> set[int]:
         """The ports *info* claims once it starts, read from its own server.properties."""
         default = default_port_for_edition(info.edition)
@@ -2220,24 +2241,37 @@ class ServerManager(EventEmitter):
         shutdown_all_gracefully is the one that gives a world as long as it needs;
         this runs from do_shutdown, where the main loop is already going away and
         nothing is left to report progress to, so the grace period is short.
+
+        Servers on a host are left out of it, exactly as they are there: this app going
+        away is not a thing that happened to another computer.
         """
         self.playit_manager.stop()
-        for process in self._processes.values():
-            if process.is_running:
+        for server_id in self.get_running_local_server_ids():
+            process = self._processes.get(server_id)
+            if process:
                 process.stop_and_wait(timeout=EMERGENCY_STOP_SECONDS)
 
     def shutdown_all_gracefully(self, progress_callback: Callable[[float, str, str], None] | None = None) -> None:
-        """Stop every running server properly, save it, and back the worlds up.
+        """Stop every server running *on this computer* properly, and back its world up.
 
         This is what quitting the app runs in place of stop_all. Each server is asked to
         save and exit and is only killed if it ignores that, and the auto backup a normal
         stop would trigger is taken here too -- the poll loop that normally takes those is
         tied to the window, which is on its way out by the time this matters.
 
+        Which servers those are is the whole point of the list below. A server on a host
+        is not one of them: it is kept alive by that machine's own service manager and
+        was already running before this window opened, so closing a window here has no
+        more business shutting it down than closing a browser tab has. It keeps running,
+        and the copy of this app on the host stops and backs it up when that machine's
+        app is closed -- including servers somebody started on it from over here, which
+        are, from the host's point of view, servers running on the host with nobody
+        local watching them.
+
         Blocking, and slow by design: callers run it on a worker thread and keep a
         progress dialog up, reporting (fraction, title, detail).
         """
-        running = self.get_running_server_ids()
+        running = self.get_running_local_server_ids()
         self.playit_manager.stop()
         if not running:
             return
@@ -2258,6 +2292,9 @@ class ServerManager(EventEmitter):
 
         # Everything comes down first and is only then backed up: if the machine is being
         # shut down behind us, the servers being off is the part that has to happen early.
+        # A server that would not come down is remembered, because backing a world up
+        # while it is still being written to is how a backup ends up unrestorable.
+        down: list[str] = []
         for server_id in running:
             name = name_of(server_id)
             base = step / steps
@@ -2271,10 +2308,12 @@ class ServerManager(EventEmitter):
             process = self._processes.get(server_id)
             if process:
                 process.stop_and_wait(on_wait=on_wait)
+                if not process.is_running:
+                    down.append(server_id)
             step += 1
 
         if want_backups:
-            for server_id in running:
+            for server_id in down:
                 name = name_of(server_id)
                 base = step / steps
 

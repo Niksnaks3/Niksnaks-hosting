@@ -159,12 +159,17 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
 
             return True
 
-        # Quitting for real. A running server gets stopped, saved and backed up before the
-        # app goes anywhere: closing a window is not a reason to pull the plug on a world
-        # halfway through writing itself out.
+        # Quitting for real. A server running on this computer gets stopped, saved and
+        # backed up before the app goes anywhere: closing a window is not a reason to
+        # pull the plug on a world halfway through writing itself out.
+        #
+        # A server on a host is the opposite case and is deliberately not counted here.
+        # It carries on running over there -- that is what putting it on a host was for
+        # -- so quitting with only those up closes straight away, with no shutdown
+        # screen for servers nothing is about to shut down.
         if self._shutdown_in_progress:
             return True
-        if not self._shutdown_done and self._server_manager.is_any_server_running():
+        if not self._shutdown_done and self._server_manager.is_any_local_server_running():
             self._begin_shutdown_sequence()
             return True
 
@@ -176,11 +181,17 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         return False
 
     def _begin_shutdown_sequence(self):
-        """Stop, save and back up the running servers, then close for real.
+        """Stop, save and back up the servers running on this computer, then close.
 
         Left to itself the quit path reaches stop_all, which allows a server a few seconds
         and then kills it -- not enough for a modded world -- and takes no backup at all,
         because the poll that normally takes those goes away with the window.
+
+        This machine's servers means all of them, including the ones somebody started on
+        it from another computer over SSH: the world is here, the app that started it
+        left it running on purpose when it closed, and this is the last window that can
+        write it out. Servers this app runs on a *host* are the other way round and are
+        left alone -- see ServerManager.shutdown_all_gracefully.
         """
         self._shutdown_in_progress = True
 

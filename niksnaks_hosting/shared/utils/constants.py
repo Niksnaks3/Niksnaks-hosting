@@ -265,6 +265,13 @@ def get_required_java_version(mc_version: str) -> int:
 CONSOLE_LOG_FILE = "console.log"
 CONSOLE_IN_FILE = "console.in"
 
+# Windows has no FIFO, so a server a Scheduled Task runs there is started by a launcher
+# script that watches console.in and types what appears into the process. This file is
+# what that launcher writes while it is doing so -- the wrapper's pid, the server's, and
+# the server's image name -- and it removes it on the way out. Its wrapper being alive is
+# how any copy of this app tells an inbox that is being read from one that is not.
+LAUNCHER_PID_FILE = "niksnaks.pid"
+
 # A server folder holds two pictures: icon.png, the app's own copy that the sidebar
 # draws, and server-icon.png, the one Minecraft shows in the multiplayer list. Both are
 # written from the picture the user picks, so a modpack is not free to paint over them.

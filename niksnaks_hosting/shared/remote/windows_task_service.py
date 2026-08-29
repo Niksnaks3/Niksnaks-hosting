@@ -38,6 +38,7 @@ from niksnaks_hosting.shared.remote.remote_service import (
     unit_name,
 )
 from niksnaks_hosting.shared.remote.ssh_client import SshError
+from niksnaks_hosting.shared.utils.constants import LAUNCHER_PID_FILE
 
 if TYPE_CHECKING:
     from niksnaks_hosting.shared.remote.host import SshHost
@@ -46,8 +47,10 @@ if TYPE_CHECKING:
 TASK_FOLDER = "Niksnaks-Hosting"
 
 # Written by the launcher, holding the wrapper's pid and the JVM's. Its absence is how
-# everything here knows the server is not running.
-PID_FILE = "niksnaks.pid"
+# everything here knows the server is not running. Named alongside console.in and
+# console.log, because a copy of this app on the host reads it out of the same folder to
+# tell whether the launcher is still forwarding the inbox.
+PID_FILE = LAUNCHER_PID_FILE
 LAUNCHER = "niksnaks-run.ps1"
 
 # The stand-in for a FIFO. The launcher watches it and forwards new lines into the

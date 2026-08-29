@@ -61,6 +61,9 @@ class Owner:
     # a marker left by a release that did not have the console channel at all.
     console: bool = False
     pid: int = 0
+    # Which computer that install is on. Empty for a marker written by a release from
+    # before closing the app had to tell "another copy here" from "somebody over SSH".
+    machine: str = ""
 
     @property
     def age(self) -> float:
@@ -100,12 +103,17 @@ def install_id() -> str:
     return _cached_id
 
 
+def this_machine() -> str:
+    """The name of the computer this app is running on, as far as it can tell."""
+    try:
+        return socket.gethostname() or ""
+    except Exception:
+        return ""
+
+
 def install_label() -> str:
     """Something a person reading the warning can act on: which machine is the other one."""
-    try:
-        machine = socket.gethostname() or ""
-    except Exception:
-        machine = ""
+    machine = this_machine()
     user = os.environ.get("USERNAME") or os.environ.get("USER") or ""
     if machine and user:
         return f"{user} on {machine}"
@@ -132,6 +140,7 @@ def read_owner(server_dir: Any) -> Owner | None:
             at=float(data.get("at") or 0.0),
             console=bool(data.get("console", False)),
             pid=int(data.get("pid") or 0),
+            machine=str(data.get("machine", "") or ""),
         )
     except (TypeError, ValueError):
         return None
@@ -143,6 +152,31 @@ def other_owner(server_dir: Any) -> Owner | None:
     if owner is None or owner.is_us or not owner.fresh or not owner.install_id:
         return None
     return owner
+
+
+def owner_on_this_machine(server_dir: Any) -> Owner | None:
+    """Another install of this app, on *this* computer, currently looking after a server.
+
+    The question closing the app has to ask about a server it did not start itself. One
+    being run by a second install here is that install's to look after, and it will save
+    and back it up when its own window closes. One started from another computer over
+    SSH has nobody on this machine watching it -- the app at the far end deliberately
+    leaves it running when it closes -- so on the machine the world actually lives on,
+    this app is the last one that can write it out, and it must not walk away from that.
+
+    A marker nobody has refreshed for a few minutes means the same thing as no marker at
+    all: whatever wrote it is gone, and the server is this app's to see off.
+    """
+    owner = other_owner(server_dir)
+    if owner is None:
+        return None
+    if owner.machine:
+        return owner if owner.machine == this_machine() else None
+    # Written by a release that did not record the machine. The label ends in the
+    # hostname, so the same account on this computer matches ours exactly and anything
+    # else is treated as elsewhere -- the safe way round to be wrong, since a world left
+    # running with nobody to write it out is the outcome worth avoiding.
+    return owner if owner.label == install_label() else None
 
 
 def console_is_watched(server_dir: Any) -> bool:
@@ -165,6 +199,7 @@ def claim(server_dir: Any, pid: int = 0) -> None:
         # Everything that writes a marker is watching the inbox by the time it does.
         "console": True,
         "pid": int(pid or 0),
+        "machine": this_machine(),
     }
     try:
         (server_dir / OWNER_FILE).write_text(json.dumps(payload, indent=2))

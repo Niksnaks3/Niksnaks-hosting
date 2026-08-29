@@ -63,8 +63,9 @@ graphs in the same window.
   Windows or Linux, and give its password once. The app installs a dedicated key so it
   never asks again, then installs Java and the loader on the host and runs the server
   there — as a systemd user service on Linux, or a Scheduled Task on Windows — and
-  streams its console back. Servers keep running on the host after you close the app,
-  and are picked up again next time you open it.
+  streams its console back. Servers keep running on the host after you close the app —
+  quitting here never shuts down a machine over there — and are picked up again next time
+  you open it.
 - **Adopt an existing install** — if Niksnaks-Hosting is already managing servers on that
   host, the app asks it what those are as soon as you add the machine, and offers to
   bring them under this app's control too. Nothing has to be typed in by hand.
@@ -108,8 +109,14 @@ graphs in the same window.
 - **Playit.gg tunnels** — share your server with friends without touching your router.
 - **Backups** — world-only or full-server backups, restore from any of them, and optional
   auto-cleanup of ones older than 30 days.
-- **Safe quit** — closing the app stops every running server, waits for the world to finish
-  saving, and takes the auto backup before it exits. No more killing a server mid-write.
+- **Safe quit** — closing the app stops every server running **on that computer**, waits
+  for each world to finish saving, and takes the auto backup before it exits. No more
+  killing a server mid-write.
+- **Quitting never touches another machine** — a server you run on a host over SSH keeps
+  going when you close the app, exactly as it does when you close the lid. That is the
+  whole point of putting it there. It is the copy of Niksnaks-Hosting **on the host** that
+  saves and backs it up, when that machine's app is closed — and it does so for every
+  server running there, including the ones you started on it from over here.
 - **Per-server Java control** — pick a Java version and set custom JVM arguments.
 
 ### Polish

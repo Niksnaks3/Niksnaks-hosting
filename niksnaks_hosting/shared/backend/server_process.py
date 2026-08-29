@@ -9,11 +9,16 @@ from pathlib import Path
 
 from niksnaks_hosting.shared.backend.loader_launch import resolve_launch_args
 from niksnaks_hosting.shared.core.events import EventEmitter
-from niksnaks_hosting.shared.remote.ownership import HEARTBEAT_SECONDS, other_owner
+from niksnaks_hosting.shared.remote.ownership import (
+    HEARTBEAT_SECONDS,
+    other_owner,
+    owner_on_this_machine,
+)
 from niksnaks_hosting.shared.utils.constants import (
     CONSOLE_IN_FILE,
     CONSOLE_LOG_FILE,
     EDITION_JAVA,
+    LAUNCHER_PID_FILE,
     LOADER_FABRIC,
     ServerStatus,
     get_edition_display_name,
@@ -134,12 +139,13 @@ def console_has_reader(inbox: Path) -> bool:
 def console_is_live(server_dir: Path) -> str:
     """What is running a server in this folder that this app cannot see, if anything.
 
-    Returns a phrase naming it, for the console to say, or an empty string. Two things
+    Returns a phrase naming it, for the console to say, or an empty string. Three things
     leave evidence in the folder. A unit started from another computer holds the inbox
-    open, which console_has_reader asks about directly. Another copy of this app running
-    the server as its own child leaves the owner marker instead, refreshed while it runs
-    -- that one is a claim rather than a measurement, so it is only believed when the
-    inbox is not a FIFO that has already answered the question.
+    open, which console_has_reader asks about directly; a Scheduled Task started the same
+    way onto a Windows machine leaves a live launcher pid instead. Another copy of this
+    app running the server as its own child leaves the owner marker -- that one is a
+    claim rather than a measurement, so it is only believed once the two direct answers
+    have come up empty.
     """
     try:
         inbox = server_dir / CONSOLE_IN_FILE
@@ -148,10 +154,35 @@ def console_is_live(server_dir: Path) -> str:
     except OSError:
         return ""
 
+    if launcher_is_watching(server_dir):
+        return "started from another computer"
+
     owner = other_owner(server_dir)
     if owner is not None and owner.console:
         return f"started by {owner.label}"
     return ""
+
+
+def launcher_is_watching(server_dir: Path) -> bool:
+    """Whether a Windows launcher in this folder is forwarding the inbox to the server.
+
+    Windows has no FIFO, so console_has_reader has nothing to ask. What a server started
+    on a Windows machine from another computer does have is the launcher its Scheduled
+    Task runs: it watches console.in for as long as the server is up and records its own
+    pid in the folder while it does. That pid being alive is the same answer the FIFO
+    gives on Linux -- a line put in the inbox will reach the server.
+    """
+    try:
+        record = (server_dir / LAUNCHER_PID_FILE).read_text(errors="replace").split()
+    except (OSError, ValueError):
+        return False
+    if not record:
+        return False
+    try:
+        wrapper = int(record[0])
+    except ValueError:
+        return False
+    return pid_alive(wrapper)
 
 
 def pid_alive(pid: int | None) -> bool:
@@ -428,14 +459,7 @@ class ServerProcess(EventEmitter):
         to be killed because it ignored the stop command for *timeout* seconds.
         """
         if self._adopted:
-            # Closing this app is not a reason to shut down a server it never started.
-            # It was running before the window opened and belongs to whatever did start
-            # it, which may well be a person sitting at another computer.
-            self._emit_output(
-                "[Niksnaks-Hosting] Leaving this server running: it was started "
-                "somewhere else, and closing this app does not stop it.\n"
-            )
-            return True
+            return self._stop_adopted_and_wait(timeout=timeout, on_wait=on_wait)
 
         process = self._process
         if not self.is_running or not process:
@@ -730,10 +754,17 @@ class ServerProcess(EventEmitter):
     def _console_reaches_server(self) -> bool:
         """Whether a line put in this folder's inbox would actually reach the server.
 
-        Two ways it can. A unit written onto this machine from another computer holds
-        the inbox open as the process's stdin, in which case it is a FIFO and an append
-        goes straight in. Otherwise a copy of this app is running the server itself and
+        Three ways it can. A systemd unit written onto this machine from another computer
+        holds the inbox open as the process's stdin, in which case it is a FIFO and an
+        append goes straight in. A Scheduled Task written onto a Windows machine the same
+        way runs a launcher that watches the file instead, and says so by keeping its pid
+        in the folder. Otherwise a copy of this app is running the server itself and
         watching the file, which it says in the folder's owner marker.
+
+        The last of those is the only one that goes stale, which is why it is asked last:
+        an app that was closed leaves its marker behind for a few minutes, and taking
+        that as an answer would have a stop wait out the whole grace period on a console
+        nobody was reading and then kill the world.
         """
         try:
             if self._console_in_path.is_fifo():
@@ -742,6 +773,8 @@ class ServerProcess(EventEmitter):
                 return console_has_reader(self._console_in_path)
         except OSError:
             pass
+        if launcher_is_watching(self.server_dir):
+            return True
         try:
             from niksnaks_hosting.shared.remote.ownership import console_is_watched
 
@@ -869,6 +902,12 @@ class ServerProcess(EventEmitter):
 
     def _stop_adopted(self) -> None:
         """Stop a server this app did not start, by typing into the folder's console."""
+        if not self._begin_adopted_stop():
+            return
+        threading.Thread(target=self._await_adopted_stop, daemon=True).start()
+
+    def _begin_adopted_stop(self) -> bool:
+        """Check the stop can even be delivered, and say it is on its way. False if not."""
         if not self._console_reaches_server():
             self._emit_output(
                 "[Niksnaks-Hosting] Nothing is listening to this server's console, so a "
@@ -876,38 +915,86 @@ class ServerProcess(EventEmitter):
                 "does not read the server folder -- an older Niksnaks-Hosting, or a "
                 "script. Stop it where it was started, or use Force stop.\n"
             )
-            return
+            return False
 
         self.status = ServerStatus.STOPPING
         self._emit_output("[Niksnaks-Hosting] Sending stop command...\n")
+        return True
+
+    def _await_adopted_stop(
+        self,
+        timeout: float = STOP_GRACE_SECONDS,
+        on_wait: Callable[[float], None] | None = None,
+    ) -> bool:
+        """Send the stop and block until the world is on disk. Runs on a worker thread.
+
+        Split out of _stop_adopted so that quitting, which has to know when the saving
+        has actually finished before it takes a backup, can wait on the same sequence a
+        button press fires and forgets.
+        """
         pid = self._pid
+        if not self.is_bedrock:
+            self.send_command("save-all flush")
+        self.send_command("stop")
 
-        def worker() -> None:
-            if not self.is_bedrock:
-                self.send_command("save-all flush")
-            self.send_command("stop")
-            deadline = time.monotonic() + STOP_GRACE_SECONDS
-            while time.monotonic() < deadline and self._adopted_alive():
-                time.sleep(0.5)
-            if self._adopted_alive():
-                if pid:
-                    self._emit_output("[Niksnaks-Hosting] Server did not stop in time, killing...\n")
-                    kill_pid(pid)
-                else:
-                    # Still up, and nothing here can force it. Saying so and putting the
-                    # row back to running is the honest end: marking it stopped would be
-                    # a lie, and leaving it stopping for good gives no way to try again.
-                    self._emit_output(
-                        "[Niksnaks-Hosting] The server has not stopped, and there is no "
-                        "process here to force it. Stop it on the computer it was "
-                        "started from.\n"
-                    )
-                    self.status = ServerStatus.RUNNING
-                    return
-            self._emit_output("[Niksnaks-Hosting] Server stopped.\n")
-            self._finish_adopted()
+        started = time.monotonic()
+        deadline = started + max(1.0, float(timeout))
+        while time.monotonic() < deadline and self._adopted_alive():
+            if on_wait:
+                on_wait(time.monotonic() - started)
+            time.sleep(0.5)
 
-        threading.Thread(target=worker, daemon=True).start()
+        stopped_on_its_own = not self._adopted_alive()
+        if not stopped_on_its_own:
+            if pid:
+                self._emit_output("[Niksnaks-Hosting] Server did not stop in time, killing...\n")
+                kill_pid(pid)
+            else:
+                # Still up, and nothing here can force it. Saying so and putting the
+                # row back to running is the honest end: marking it stopped would be
+                # a lie, and leaving it stopping for good gives no way to try again.
+                self._emit_output(
+                    "[Niksnaks-Hosting] The server has not stopped, and there is no "
+                    "process here to force it. Stop it on the computer it was "
+                    "started from.\n"
+                )
+                self.status = ServerStatus.RUNNING
+                return False
+        self._emit_output("[Niksnaks-Hosting] Server stopped.\n")
+        self._finish_adopted()
+        return stopped_on_its_own
+
+    def _stop_adopted_and_wait(
+        self,
+        timeout: float = STOP_GRACE_SECONDS,
+        on_wait: Callable[[float], None] | None = None,
+    ) -> bool:
+        """What closing the app does about a server running here that it did not start.
+
+        Which of two things depends on who is looking after it. A second copy of this
+        app *on this computer* will save and back the server up when its own window
+        closes, so this one leaves it alone. A server started from another computer over
+        SSH has nobody here watching it -- the app at the far end leaves it running on
+        purpose when it closes, because pulling a server down over a window closing on a
+        laptop is not something anybody asked for -- and the world is on this machine, so
+        this app is the last one that can write it out. That one is stopped and saved.
+        """
+        keeper = owner_on_this_machine(self.server_dir)
+        if keeper is not None:
+            self._emit_output(
+                "[Niksnaks-Hosting] Leaving this server running: another copy of "
+                f"Niksnaks-Hosting on this computer ({keeper.label}) is running it and "
+                "will stop it when it closes.\n"
+            )
+            return True
+
+        self._emit_output(
+            "[Niksnaks-Hosting] This server was started from another computer, but it "
+            "is running on this one -- saving and stopping it before closing.\n"
+        )
+        if not self._begin_adopted_stop():
+            return False
+        return self._await_adopted_stop(timeout=timeout, on_wait=on_wait)
 
     def _finish_adopted(self) -> None:
         self._adopt_stop.set()
