@@ -81,6 +81,10 @@ graphs in the same window.
   where the copy of Niksnaks-Hosting on that machine keeps its own, and written into
   that machine's server list, so it appears over there like any other server it runs.
   Rename it, give it a picture or delete it from here and the other end follows.
+- **Removing a host cleans up after itself** — its servers drop out of the local list
+  instead of being left stranded, without touching anything on the machine itself. A
+  **Clear all hosts** button does the same for every host at once, revoking its login
+  key where the machine is reachable.
 
 ### Mods, modpacks & worlds
 
