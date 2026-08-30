@@ -150,6 +150,23 @@ class HostsManager(EventEmitter):
             host.close()
         self.emit_on_main_thread("hosts-changed")
 
+    def remove_all(self) -> list[SshHost]:
+        """Forget every machine added over SSH, in one save and one signal.
+
+        The removed hosts are handed back rather than dropped on the floor: taking this
+        app's login key back off each one is a round trip per machine, and the registry
+        has no business holding a lock across the network to do it. The caller does that
+        first, while the hosts are still listed, and calls this once it is finished.
+        """
+        with self._lock:
+            removed = list(self._hosts.values())
+            self._hosts.clear()
+            self._save()
+        for host in removed:
+            host.close()
+        self.emit_on_main_thread("hosts-changed")
+        return removed
+
     def rename(self, host_id: str, name: str) -> None:
         with self._lock:
             host = self._hosts.get(str(host_id))

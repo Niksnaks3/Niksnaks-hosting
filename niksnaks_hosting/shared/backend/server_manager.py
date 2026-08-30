@@ -1827,6 +1827,44 @@ class ServerManager(EventEmitter):
         self._save()
         self.emit_on_main_thread("server-removed", server_id)
 
+    def servers_on_host(self, host_id: str) -> list[ServerInfo]:
+        """Every server this app lists that lives on one particular machine."""
+        wanted = str(host_id or "")
+        return [info for info in self.servers if info.host_id == wanted]
+
+    def forget_server(self, server_id: str) -> bool:
+        """Drop this app's record of a server and leave the server itself alone.
+
+        The other end of delete_server. Nothing is stopped, no folder is removed, the
+        unit or task keeping the server alive on its own machine stays exactly as it
+        is, and the list that machine's copy of this app keeps is not touched -- so a
+        mirrored server is still a server over there, not an orphaned folder. All that
+        happens is that this install stops knowing about it.
+        """
+        info = self._servers.get(server_id)
+        if not info:
+            return False
+
+        if self.playit_manager.is_running_for(server_id):
+            # The tunnel is a process on this computer, and once the server is gone from
+            # here there is nothing left to own it or to switch it off later.
+            self.playit_manager.stop_server(server_id)
+
+        process = self._processes.pop(server_id, None)
+        if process is not None:
+            process.detach()
+
+        del self._servers[server_id]
+        # Remembered for the same reason delete_server remembers: the entry may still be
+        # on disk, or be written back by another copy of this app a moment from now, and
+        # it must not be read in again as a server that has just appeared.
+        self._forgotten.add(server_id)
+        self._mirrored.pop(server_id, None)
+        self._icon_cache.pop(server_id, None)
+        self._save()
+        self.emit_on_main_thread("server-removed", server_id)
+        return True
+
     def get_process(self, server_id: str) -> ServerProcess | None:
         info = self._servers.get(server_id)
         if not info:

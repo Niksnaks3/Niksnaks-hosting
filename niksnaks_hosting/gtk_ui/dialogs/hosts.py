@@ -38,12 +38,29 @@ def show_hosts_dialog(parent: Gtk.Window, hosts: HostsManager, manager=None) -> 
     )
     page.add(group)
 
+    # Sits in the group's header rather than as a row of its own: it acts on the whole
+    # list below it, and a row would read as one more host to add.
+    clear_all = Gtk.Button(label=_("Clear all…"), valign=Gtk.Align.CENTER)
+    clear_all.add_css_class("flat")
+    clear_all.set_tooltip_text(
+        _("Forget every host here, leaving their servers running on their own machines")
+    )
+    clear_all.connect(
+        "clicked",
+        lambda button: _confirm_clear_all(dialog, hosts, manager, rebuild, button),
+    )
+    group.set_header_suffix(clear_all)
+
     rows: list[Gtk.Widget] = []
 
     def rebuild() -> None:
         for row in rows:
             group.remove(row)
         rows.clear()
+
+        clear_all.set_visible(bool(hosts.ssh_hosts()))
+        clear_all.set_sensitive(True)
+        clear_all.set_label(_("Clear all…"))
 
         for host in hosts.ssh_hosts():
             row = Adw.ActionRow(title=host.name, subtitle=host.credentials.label)
@@ -92,7 +109,10 @@ def show_hosts_dialog(parent: Gtk.Window, hosts: HostsManager, manager=None) -> 
             remove = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER)
             remove.add_css_class("flat")
             remove.set_tooltip_text(_("Remove this host"))
-            remove.connect("clicked", lambda _b, h=host: _confirm_remove(dialog, hosts, h, rebuild))
+            remove.connect(
+                "clicked",
+                lambda _b, h=host: _confirm_remove(dialog, hosts, h, rebuild, manager),
+            )
             row.add_suffix(remove)
 
             group.add(row)
@@ -300,16 +320,17 @@ def _test_host(parent, host, status_label: Gtk.Label) -> None:
     threading.Thread(target=worker, daemon=True).start()
 
 
-def _confirm_remove(parent, hosts: HostsManager, host, on_done) -> None:
+def _confirm_remove(parent, hosts: HostsManager, host, on_done, manager=None) -> None:
     dialog = Adw.AlertDialog()
     dialog.set_heading(_("Remove {}?").format(host.name))
     dialog.set_body(
         _(
-            "This app stops managing the host. If it has a login key on the machine, it "
-            "tries to take that back off too, though a host that cannot be reached right "
-            "now will keep its key line until it is. Servers already on it are left "
-            "exactly as they are, still running, and nothing else on the machine is "
-            "deleted."
+            "This app stops managing the host, and its servers drop off the list here. "
+            "If it has a login key on the machine, it tries to take that back off too, "
+            "though a host that cannot be reached right now will keep its key line until "
+            "it is. Servers already on it are left exactly as they are, still running, "
+            "the machine's own copy of Niksnaks-Hosting still has them, and nothing on "
+            "it is deleted."
         )
     )
     dialog.add_response("cancel", _("Cancel"))
@@ -320,14 +341,21 @@ def _confirm_remove(parent, hosts: HostsManager, host, on_done) -> None:
 
     def on_response(_d, response):
         if response == "remove":
-            _remove_host(parent, hosts, host, on_done)
+            _remove_host(parent, hosts, host, on_done, manager)
 
     dialog.connect("response", on_response)
     dialog.present(parent)
 
 
-def _remove_host(parent, hosts: HostsManager, host, on_done) -> None:
+def _remove_host(parent, hosts: HostsManager, host, on_done, manager=None) -> None:
     """Take the app's key off the machine before forgetting how to reach it."""
+    if manager is not None:
+        # Before the host goes, not after: a server whose machine this app no longer
+        # knows cannot even say where its folder is, which is enough to stop the whole
+        # server list being written to disk. Forgetting it changes nothing on the
+        # machine -- see ServerManager.forget_server.
+        for info in manager.servers_on_host(host.id):
+            manager.forget_server(info.id)
 
     def worker() -> None:
         from niksnaks_hosting.shared.remote.key_auth import KEY_PATH, revoke_key
@@ -359,6 +387,131 @@ def _remove_host(parent, hosts: HostsManager, host, on_done) -> None:
                     ).format(host.name),
                 )
             on_done()
+            return False
+
+        GLib.idle_add(finish)
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def _confirm_clear_all(parent, hosts: HostsManager, manager, on_done, button: Gtk.Button) -> None:
+    """Start over with no remote machines, without disturbing any of them.
+
+    Wanted after moving computers, handing the app to somebody else, or simply ending up
+    with a list of machines that are not yours any more. It is emphatically not a delete:
+    every server named here is on somebody's real machine, very likely with people on it,
+    and the only thing that changes is that this install stops keeping track.
+    """
+    host_list = hosts.ssh_hosts()
+    if not host_list:
+        return
+
+    server_count = 0
+    if manager is not None:
+        server_count = sum(len(manager.servers_on_host(host.id)) for host in host_list)
+
+    dialog = Adw.AlertDialog()
+    dialog.set_heading(
+        _("Clear {} host?").format(len(host_list))
+        if len(host_list) == 1
+        else _("Clear all {} hosts?").format(len(host_list))
+    )
+
+    lines = [
+        _(
+            "Niksnaks-Hosting forgets every machine listed here: {}."
+        ).format(", ".join(host.name for host in host_list))
+    ]
+    if server_count == 1:
+        lines.append(_("The 1 server of theirs in your list disappears from it too."))
+    elif server_count > 1:
+        lines.append(_("The {} servers of theirs in your list disappear from it too.").format(server_count))
+    lines.append(
+        _(
+            "Nothing on those machines is touched. Servers that are running keep "
+            "running, no files are deleted, and each machine's own copy of "
+            "Niksnaks-Hosting still has its servers. Only this computer stops keeping "
+            "track of them. The app's login key is taken back off every machine it can "
+            "still reach, the same as removing one host at a time."
+        )
+    )
+    lines.append(_("Add a machine again later and its servers come back."))
+    dialog.set_body("\n\n".join(lines))
+
+    dialog.add_response("cancel", _("Cancel"))
+    dialog.add_response("clear", _("Clear"))
+    dialog.set_response_appearance("clear", Adw.ResponseAppearance.DESTRUCTIVE)
+    dialog.set_default_response("cancel")
+    dialog.set_close_response("cancel")
+
+    def on_response(_d, response):
+        if response == "clear":
+            _clear_all_hosts(parent, hosts, manager, on_done, button)
+
+    dialog.connect("response", on_response)
+    dialog.present(parent)
+
+
+def _clear_all_hosts(parent, hosts: HostsManager, manager, on_done, button: Gtk.Button) -> None:
+    """Forget the servers first, then the machines they were on.
+
+    That order matters. Forgetting a server lets its process object go of the console
+    channel and the ownership marker it holds over SSH, which needs the host to still be
+    reachable -- and taking the login key back off wants the same. So everything that
+    talks to a machine happens while it is still a host, and the list is only emptied
+    once none of it is needed again.
+    """
+    host_list = hosts.ssh_hosts()
+    if manager is not None:
+        for host in host_list:
+            for info in manager.servers_on_host(host.id):
+                manager.forget_server(info.id)
+
+    # An unreachable machine holds this open for its whole connect timeout, and there
+    # may be several of them, so the button says what is going on rather than looking
+    # like a click that did nothing.
+    button.set_sensitive(False)
+    button.set_label(_("Clearing…"))
+
+    def worker() -> None:
+        from niksnaks_hosting.shared.remote.key_auth import KEY_PATH, revoke_key
+
+        kept_keys: list[str] = []
+        for host in host_list:
+            # Only worth a round trip to a machine this app actually put its key on.
+            if host.credentials.key_path != str(KEY_PATH):
+                continue
+            try:
+                revoked = revoke_key(host)
+            except Exception:
+                revoked = False
+            if not revoked:
+                kept_keys.append(host.name)
+
+        def finish() -> bool:
+            hosts.remove_all()
+            on_done()
+            parent.add_toast(
+                Adw.Toast(
+                    title=_("Cleared 1 host")
+                    if len(host_list) == 1
+                    else _("Cleared {} hosts").format(len(host_list))
+                )
+            )
+            if kept_keys:
+                # The dialog promised the keys would come back off; say plainly where
+                # they did not, rather than leaving live credentials on machines this
+                # app no longer manages without mentioning it.
+                _alert(
+                    parent,
+                    _("Could not remove every login key"),
+                    _(
+                        "These machines could not be reached, so this app's login key "
+                        "is still on them: {}. It is harmless on its own, but if you "
+                        "want it gone, remove it by hand or add the machine again "
+                        "later just to take it back off."
+                    ).format(", ".join(kept_keys)),
+                )
             return False
 
         GLib.idle_add(finish)

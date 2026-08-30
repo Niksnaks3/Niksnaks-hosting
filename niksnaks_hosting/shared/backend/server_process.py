@@ -524,6 +524,16 @@ class ServerProcess(EventEmitter):
             self._emit_players_changed()
             self._emit_output("[Niksnaks-Hosting] Server killed.\n")
 
+    def detach(self) -> None:
+        """Let go of a server without stopping it.
+
+        Nothing to do for a server on this computer: forgetting one of these is not
+        something the app offers, and the process object is dropped along with the
+        record. Overridden for a server on another machine, where threads of ours are
+        following it over SSH and have to be told to stop looking.
+        """
+        return
+
     def send_command(self, command: str):
         cmd = command.strip()
         if cmd.startswith("/"):

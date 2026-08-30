@@ -369,6 +369,25 @@ class RemoteServerProcess(ServerProcess):
         # Killing is an SSH round trip and this comes straight off a button press.
         threading.Thread(target=worker, daemon=True).start()
 
+    def detach(self) -> None:
+        """Stop following this server, and change nothing about it.
+
+        What the app does when it is asked to forget a host: the unit or task on the far
+        machine goes on running exactly as it is, its folder is left alone, and its own
+        machine's copy of this app still has it. All that ends is the watching -- the
+        console channel, the state poller, and the ownership marker claiming this
+        install is the one looking after the folder, which stops being true the moment
+        there is nobody here to look.
+        """
+        self._stopping.set()
+        self._release_ownership()
+        try:
+            if self._console_channel is not None:
+                self._console_channel.close()
+        except Exception:
+            pass
+        self._console_channel = None
+
     def send_command(self, command: str) -> None:
         if not self.is_running:
             return
