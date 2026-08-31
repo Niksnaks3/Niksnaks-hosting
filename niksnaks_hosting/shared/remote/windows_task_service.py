@@ -138,6 +138,10 @@ class WindowsTaskService:
         return f"{self.server_dir}/{AUTOSTART_MARKER}"
 
     @property
+    def firewall_rule(self) -> str:
+        return f"Niksnaks-Hosting-RCON-{self.server_id}"
+
+    @property
     def rcon_port(self) -> int:
         """A console port that no other server on this host will pick.
 
@@ -167,6 +171,38 @@ class WindowsTaskService:
     def _schtasks(self, *args: str, timeout: float = 60.0):
         return self.host.run(["schtasks", *args], timeout=timeout)
 
+    def _register_task(self, description: str, at_startup: bool) -> None:
+        """Hand the definition to the Task Scheduler, replacing whatever was there.
+
+        Shared by write_unit and enable_autostart, which both need the same S4U-then-
+        interactive-token fallback: S4U lets a task start without anyone being logged
+        in, but registering one needs a privilege some accounts do not have. Falling
+        back to an interactive token still works, just only while the user is signed in.
+        """
+        xml_path = f"{self.ops.script_dir(self.host)}/{self.unit}.xml"
+        remote = self.host.path(xml_path)
+        remote.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            result = None
+            for interactive in (False, True):
+                xml = self._task_xml(description, at_startup, interactive=interactive)
+                # schtasks reads a task definition as UTF-16, and answers a UTF-8 one
+                # with a parse error that names nothing useful.
+                remote.write_bytes(b"\xff\xfe" + xml.encode("utf-16-le"))
+                result = self._schtasks("/Create", "/TN", self.task, "/XML", self.ops.to_native(xml_path), "/F")
+                if result.ok:
+                    return
+            raise SshError(
+                _("Could not set up the server task on {}: {}").format(
+                    self.host.name, result.output or _("exit status {}").format(result.exit_status)
+                )
+            )
+        finally:
+            try:
+                remote.unlink(missing_ok=True)
+            except Exception:
+                pass
+
     # --------------------------------------------------------------- installation
     def write_unit(self, description: str, exec_args: list[str], ram_mb: int) -> None:
         """Describe the server to the Task Scheduler, replacing whatever was there.
@@ -180,35 +216,7 @@ class WindowsTaskService:
         self._write_launcher(exec_args)
 
         at_startup = self.host.path(self.autostart_path).exists()
-        xml = self._task_xml(description or self.unit, at_startup)
-        xml_path = f"{self.ops.script_dir(self.host)}/{self.unit}.xml"
-        self.host.path(xml_path).parent.mkdir(parents=True, exist_ok=True)
-        # schtasks reads a task definition as UTF-16, and answers a UTF-8 one with a
-        # parse error that names nothing useful.
-        self.host.path(xml_path).write_bytes(b"\xff\xfe" + xml.encode("utf-16-le"))
-
-        try:
-            result = self._schtasks("/Create", "/TN", self.task, "/XML", self.ops.to_native(xml_path), "/F")
-            if not result.ok:
-                # S4U lets a task start without anyone being logged in, but registering
-                # one needs a privilege some accounts do not have. Falling back to an
-                # interactive token still works, just only while the user is signed in.
-                xml = self._task_xml(description or self.unit, at_startup, interactive=True)
-                self.host.path(xml_path).write_bytes(b"\xff\xfe" + xml.encode("utf-16-le"))
-                result = self._schtasks(
-                    "/Create", "/TN", self.task, "/XML", self.ops.to_native(xml_path), "/F"
-                )
-            if not result.ok:
-                raise SshError(
-                    _("Could not set up the server task on {}: {}").format(
-                        self.host.name, result.output or _("exit status {}").format(result.exit_status)
-                    )
-                )
-        finally:
-            try:
-                self.host.path(xml_path).unlink(missing_ok=True)
-            except Exception:
-                pass
+        self._register_task(description or self.unit, at_startup)
 
     def remove_unit(self) -> None:
         try:
@@ -217,6 +225,15 @@ class WindowsTaskService:
             pass
         try:
             self._schtasks("/Delete", "/TN", self.task, "/F")
+        except Exception:
+            pass
+        try:
+            self.ops.run_script(
+                self.host,
+                f"Remove-NetFirewallRule -DisplayName {ps_quote(self.firewall_rule)} "
+                "-ErrorAction SilentlyContinue | Out-Null",
+                timeout=30,
+            )
         except Exception:
             pass
 
@@ -230,12 +247,7 @@ class WindowsTaskService:
         # in full -- and without the caller's description, that rewrite would overwrite
         # whatever write_unit last put there with this.unit's raw id.
         if self.host.path(self.launcher_path).is_file():
-            xml = self._task_xml(description or self.unit, enabled)
-            xml_path = f"{self.ops.script_dir(self.host)}/{self.unit}.xml"
-            self.host.path(xml_path).parent.mkdir(parents=True, exist_ok=True)
-            self.host.path(xml_path).write_bytes(b"\xff\xfe" + xml.encode("utf-16-le"))
-            self._schtasks("/Create", "/TN", self.task, "/XML", self.ops.to_native(xml_path), "/F")
-            self.host.path(xml_path).unlink(missing_ok=True)
+            self._register_task(description or self.unit, enabled)
 
     # -------------------------------------------------------------------- control
     def start(self) -> None:
@@ -258,10 +270,25 @@ class WindowsTaskService:
         # The task starts the launcher, which starts the JVM and only then writes down
         # what it started. Nothing above should have to know that took a moment.
         deadline = time.monotonic() + START_TIMEOUT
+        saw_launcher = False
         while time.monotonic() < deadline:
-            if self._read_pids()[1]:
+            wrapper, java, _name = self._read_pids()
+            if java:
                 return
+            saw_launcher = saw_launcher or bool(wrapper)
             time.sleep(0.5)
+
+        # Silence here used to be read as success: the caller went on to treat the
+        # server as running, and only found out otherwise from a misleading "stopped
+        # on its own" a few seconds later. Say what actually happened instead.
+        tail = self.read_console_tail(20).strip()
+        if tail:
+            detail = _("its last output was:\n{}").format(tail)
+        elif saw_launcher:
+            detail = _("it wrote nothing to its log, so the server program never got as far as starting")
+        else:
+            detail = _("nothing was heard from its launcher -- check that PowerShell may run scripts there")
+        raise SshError(_("The server did not start on {}: {}").format(self.host.name, detail))
 
     def stop(self) -> None:
         """Ask for a clean shutdown first, and only then insist.
@@ -574,10 +601,9 @@ foreach ($row in $rows) {{ Write-Output $row.ProcessId }}"""
         """
         if not port:
             return
-        name = f"Niksnaks-Hosting-RCON-{self.server_id}"
         # -ErrorAction Stop, so a denied rule raises rather than being reported as
         # success by a cmdlet that writes a non-terminating error and carries on.
-        script = f"""$name = {ps_quote(name)}
+        script = f"""$name = {ps_quote(self.firewall_rule)}
 Remove-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue | Out-Null
 New-NetFirewallRule -DisplayName $name -Direction Inbound -Action Block -Protocol TCP `
     -LocalPort {int(port)} -RemoteAddress Any -ErrorAction Stop | Out-Null"""
