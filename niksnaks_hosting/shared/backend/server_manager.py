@@ -2064,9 +2064,17 @@ class ServerManager(EventEmitter):
         return bool(self.get_running_local_server_ids())
 
     def server_bound_ports(self, info: ServerInfo) -> set[int]:
-        """The ports *info* claims once it starts, read from its own server.properties."""
+        """The ports *info* claims once it starts, read from its own server.properties.
+
+        A server on a machine this app is not talking to right now is left out rather
+        than waited for. The answer is wanted while a window is being built, and dialling
+        a computer that is asleep holds that window for the whole connect timeout to
+        learn nothing; the file is read again the moment the machine is back.
+        """
         default = default_port_for_edition(info.edition)
         try:
+            if info.is_remote and not getattr(info.host, "is_connected", False):
+                return set()
             cfg = ConfigManager(info.server_dir)
             cfg.load()
             port = cfg.get_int("server-port", default)
@@ -2076,32 +2084,42 @@ class ServerManager(EventEmitter):
             return set()
         return {p for p in ports if MIN_SERVER_PORT <= p <= MAX_SERVER_PORT}
 
-    def ports_in_use(self, exclude_server_id: str = "") -> dict[int, str]:
-        """Ports the existing servers already claim, mapped to the server claiming each."""
+    def ports_in_use(self, exclude_server_id: str = "", host_id: str = "") -> dict[int, str]:
+        """Ports the servers on one machine already claim, mapped to the server claiming each.
+
+        One machine, because that is the only place a port can be contested: a server on
+        this computer and one on a host can both sit on 25565 and never notice each
+        other. Asking about every machine also meant reading server.properties over SFTP
+        from whatever asked -- which is the window's own thread, and a host that is
+        asleep holds it for the connect timeout before answering nothing.
+        """
+        wanted = str(host_id or "")
         owners: dict[int, str] = {}
         for sid, info in self._servers.items():
-            if sid == exclude_server_id:
+            if sid == exclude_server_id or info.host_id != wanted:
                 continue
             for port in self.server_bound_ports(info):
                 owners.setdefault(port, info.name)
         return owners
 
     def find_port_conflict(
-        self, port: int, edition: str = EDITION_JAVA, exclude_server_id: str = ""
+        self, port: int, edition: str = EDITION_JAVA, exclude_server_id: str = "", host_id: str = ""
     ) -> str | None:
         """Name of the server already holding *port* (or its Bedrock IPv6 partner), if any."""
-        owners = self.ports_in_use(exclude_server_id)
+        owners = self.ports_in_use(exclude_server_id, host_id)
         for candidate in sorted(ports_bound_by(port, edition)):
             if candidate in owners:
                 return owners[candidate]
         return None
 
-    def get_next_available_port(self, edition: str = EDITION_JAVA, exclude_server_id: str = "") -> int:
+    def get_next_available_port(
+        self, edition: str = EDITION_JAVA, exclude_server_id: str = "", host_id: str = ""
+    ) -> int:
         """The first port from this edition's default upwards that no server has claimed.
 
         Bedrock steps in twos because it takes the next port for IPv6 as well.
         """
-        owners = self.ports_in_use(exclude_server_id)
+        owners = self.ports_in_use(exclude_server_id, host_id)
         step = 2 if is_bedrock(edition) else 1
         port = default_port_for_edition(edition)
         while port + step - 1 <= MAX_SERVER_PORT and not ports_bound_by(port, edition).isdisjoint(owners):
@@ -2238,7 +2256,8 @@ class ServerManager(EventEmitter):
         if not mine:
             return None
         for sid, other in self._servers.items():
-            if sid == server_id:
+            # Same machine only: two servers on different computers share a port happily.
+            if sid == server_id or other.host_id != info.host_id:
                 continue
             proc = self._processes.get(sid)
             if not proc or not proc.is_running:
@@ -2721,6 +2740,12 @@ class ServerManager(EventEmitter):
         options: list[FullBackupOption] = []
 
         for info in self._servers.values():
+            # Only this computer's. A backup on another machine cannot be unpacked into a
+            # new server anyway -- create_server_from_backup reads the archive with
+            # zipfile, off this disk -- and looking for one is an SSH round trip per
+            # server, from a dialog's constructor, that raises when the machine is asleep.
+            if info.is_remote:
+                continue
             for dir_name in BACKUP_DIR_NAMES:
                 backups_dir = info.server_dir / dir_name
                 if not backups_dir.is_dir():
@@ -2863,7 +2888,9 @@ class ServerManager(EventEmitter):
             cfg.load()
             # A clone arrives on its source server's port, so a port of its own is what
             # lets the original and the copy run side by side.
-            chosen_port = port or self.get_next_available_port(edition, exclude_server_id=info.id)
+            chosen_port = port or self.get_next_available_port(
+                edition, exclude_server_id=info.id, host_id=info.host_id
+            )
             cfg.set_value("server-port", chosen_port)
             if is_bedrock(edition):
                 cfg.set_value("server-portv6", chosen_port + 1)

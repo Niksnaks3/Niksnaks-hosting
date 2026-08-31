@@ -162,7 +162,8 @@ class NiksnaksHostingApplication(Adw.Application):
             # that the servers are down; whatever still resists waits for the next
             # launch rather than holding the exit open.
             purge_pending_deletions(
-                [s.server_dir for s in self._server_manager.servers], max_attempts=1
+                [s.server_dir for s in self._server_manager.servers if not s.is_remote],
+                max_attempts=1,
             )
 
         # Only now: stopping a remote server talks to it over SSH, so the connections

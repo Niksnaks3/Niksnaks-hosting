@@ -405,7 +405,7 @@ class CreateServerDialog(Adw.Dialog):
         )
 
         port_adj = Gtk.Adjustment(
-            value=self._server_manager.get_next_available_port(),
+            value=self._server_manager.get_next_available_port(host_id=self._selected_host_id()),
             lower=MIN_SERVER_PORT,
             upper=MAX_SERVER_PORT,
             step_increment=1,
@@ -510,6 +510,10 @@ class CreateServerDialog(Adw.Dialog):
 
         self._last_host_id = self._selected_host_id()
         self._apply_host_rules()
+        # A port is only taken on one machine, so moving the server changes both the
+        # suggestion and whether what is in the row is a clash at all.
+        self._refresh_port_defaults()
+        self._validate()
 
     def _enter_add_host_page(self) -> bool:
         # Put the picker back first, so backing out of the detour leaves no trace.
@@ -519,6 +523,8 @@ class CreateServerDialog(Adw.Dialog):
 
     def _apply_host_rules(self) -> None:
         host_id = self._selected_host_id()
+        self._apply_world_import_rule(bool(host_id))
+        self._update_java_subtitle()
         allowed, why_not = self._bedrock_allowed(host_id)
         if not allowed and self._edition_row.get_selected() != 0:
             self._edition_row.set_selected(0)
@@ -676,6 +682,7 @@ class CreateServerDialog(Adw.Dialog):
             self._last_host_id = host.id
             self._refresh_host_row(select_id=host.id)
             self._apply_host_rules()
+            self._refresh_port_defaults()
             # The host works either way; a detail here means key login could not be set
             # up, which only matters once the app is closed. Said, not blocked on.
             self._host_row.set_subtitle(
@@ -790,13 +797,21 @@ class CreateServerDialog(Adw.Dialog):
         """Move an untouched port onto the first one free for the chosen edition."""
         if not self._port_edited:
             self._suppress_port_change = True
-            self._port_row.set_value(float(self._server_manager.get_next_available_port(self._effective_edition())))
+            self._port_row.set_value(
+                float(
+                    self._server_manager.get_next_available_port(
+                        self._effective_edition(), host_id=self._selected_host_id()
+                    )
+                )
+            )
             self._suppress_port_change = False
         self._refresh_port_row()
 
     def _refresh_port_row(self) -> None:
         port = self._selected_port()
-        conflict = self._server_manager.find_port_conflict(port, self._effective_edition())
+        conflict = self._server_manager.find_port_conflict(
+            port, self._effective_edition(), host_id=self._selected_host_id()
+        )
         self._port_conflict_name = conflict
 
         if conflict:
@@ -1029,6 +1044,13 @@ class CreateServerDialog(Adw.Dialog):
     def _update_java_subtitle(self) -> None:
         idx = self._java_version_row.get_selected()
         java_ver = COMMON_JAVA_VERSIONS[idx] if idx < len(COMMON_JAVA_VERSIONS) else 21
+        if self._selected_host_id():
+            # What this computer has says nothing about the one that will run it, and
+            # the install puts a Java on that machine itself if it needs to.
+            self._java_version_row.set_subtitle(
+                _("Java {} is installed on that computer if it has none").format(java_ver)
+            )
+            return
         java_mgr = self._server_manager.java_manager
         available = java_mgr.is_java_available(java_ver)
         system_ver = java_mgr.system_java_version
@@ -1179,6 +1201,23 @@ class CreateServerDialog(Adw.Dialog):
         self._remove_world_btn.set_visible(False)
         self._world_import_row.set_activatable_widget(self._choose_world_btn)
 
+    def _apply_world_import_rule(self, remote: bool) -> None:
+        """A world comes off this disk, and only a server on this disk can take it.
+
+        The import copies the folder in with shutil, which has no idea what a path on
+        another machine is. Left enabled, a world picked here would simply be dropped on
+        the way to the host without anybody being told.
+        """
+        if remote and self._world_import_source_path:
+            self._on_remove_world()
+        self._world_import_row.set_sensitive(not remote)
+        if remote:
+            self._world_import_row.set_subtitle(
+                _("Only a server on this computer can start from a world you already have")
+            )
+        elif not self._world_import_source_path:
+            self._world_import_row.set_subtitle(_("No world selected."))
+
     def _reload_backup_options(self) -> None:
         options = self._server_manager.list_full_backups()
         self._backup_choices = [(option.label, option.path, option.server_id) for option in options]
@@ -1204,7 +1243,26 @@ class CreateServerDialog(Adw.Dialog):
         if chosen:
             self._backup_edition = ServerManager.peek_backup_edition(chosen[0])
         self._apply_edition_visibility()
+        self._apply_backup_host_rule()
         self._validate()
+
+    def _apply_backup_host_rule(self) -> None:
+        """A server made from a backup is made on this computer, so say so up front.
+
+        create_server_from_backup reads the archive and writes the folder with plain
+        local file calls; there is no path that puts one on a host. Leaving "Runs on"
+        free would let the wizard promise a machine it then ignores.
+        """
+        using = self._using_backup()
+        if using and self._selected_host_id():
+            # Index 0 is always this computer -- all_hosts() lists it first.
+            self._host_row.set_selected(0)
+        self._host_row.set_sensitive(not using)
+        self._host_row.set_subtitle(
+            _("A server restored from a backup is always made on this computer")
+            if using
+            else _("This computer, or another one you connect to over SSH")
+        )
 
     def _on_choose_backup_file(self, *_args):
         dialog = Gtk.FileDialog()
@@ -1434,15 +1492,7 @@ class CreateServerDialog(Adw.Dialog):
                 self._show_error(result)
                 return
 
-            if icon_source_path:
-                self._update_progress(0.95, _("Applying server icon..."), "")
-                try:
-                    # The manager converts it and puts it in the server's own folder,
-                    # which for a server on a host is on that host: writing it here
-                    # first would only ever land on this computer's disk.
-                    self._server_manager.set_server_icon(server_info.id, icon_source_path)
-                except Exception:
-                    pass
+            self._apply_icon(server_info.id, icon_source_path)
 
             self._show_success(server_info.id)
 
@@ -1454,7 +1504,9 @@ class CreateServerDialog(Adw.Dialog):
     ):
 
         if self._selected_host_id():
-            self._install_remote_bedrock_thread(name, option, ram_mb, seed, difficulty, gamemode, port)
+            self._install_remote_bedrock_thread(
+                name, option, ram_mb, seed, difficulty, gamemode, port, icon_source_path
+            )
             return
 
         try:
@@ -1503,27 +1555,21 @@ class CreateServerDialog(Adw.Dialog):
                     self._show_error(_("Failed to import world: {}").format(msg))
                     return
 
-            if icon_source_path:
-                self._update_progress(0.95, _("Applying server icon..."), "")
-                try:
-                    # The manager converts it and puts it in the server's own folder,
-                    # which for a server on a host is on that host: writing it here
-                    # first would only ever land on this computer's disk.
-                    self._server_manager.set_server_icon(server_info.id, icon_source_path)
-                except Exception:
-                    pass
+            self._apply_icon(server_info.id, icon_source_path)
 
             self._show_success(server_info.id)
 
         except Exception as e:
             self._show_error(_("Unexpected error: {}").format(e))
 
-    def _install_remote_bedrock_thread(self, name, option, ram_mb, seed, difficulty, gamemode, port):
+    def _install_remote_bedrock_thread(
+        self, name, option, ram_mb, seed, difficulty, gamemode, port, icon_source_path=""
+    ):
         """A Bedrock server on another machine: one zip, no Java, no loader.
 
-        The icon and world-import steps the local path offers are left out here for the
-        same reason the remote Java path leaves them out -- both read files from this
-        computer, and putting them on the host is a separate job from creating it.
+        The world import the local path offers is left out: it copies a folder off this
+        disk with shutil, which cannot write to the host. The icon can go, because the
+        manager writes it through the server's own folder wherever that folder is.
         """
         from niksnaks_hosting.shared.backend.config_manager import ConfigManager
         from niksnaks_hosting.shared.remote.hosts_manager import get_hosts_manager
@@ -1603,6 +1649,7 @@ class CreateServerDialog(Adw.Dialog):
             self._show_error(_("The server was installed but its settings could not be written: {}").format(e))
             return
 
+        self._apply_icon(server_info.id, icon_source_path)
         self._show_success(server_info.id)
 
     def _install_thread(
@@ -1630,6 +1677,7 @@ class CreateServerDialog(Adw.Dialog):
                 self._install_remote_thread(
                     host_id, name, mc_version, loader_version, loader_type, ram_mb, java_version,
                     seed, difficulty, hardcore_mode, gamemode, level_type, install_optimisations, port,
+                    icon_source_path,
                 )
                 return
 
@@ -1793,20 +1841,11 @@ class CreateServerDialog(Adw.Dialog):
                     self._show_error(_("Failed to import world: {}").format(msg))
                     return
 
-            if icon_source_path:
-                self._update_progress(0.92, _("Applying server icon..."), "")
-                try:
-                    # The manager converts it and puts it in the server's own folder,
-                    # which for a server on a host is on that host: writing it here
-                    # first would only ever land on this computer's disk.
-                    self._server_manager.set_server_icon(server_info.id, icon_source_path)
-                except Exception:
-                    pass
-
             if install_optimisations:
                 self._update_progress(0.94, _("Installing server-optimising mods..."), "0/0")
                 self._install_optimising_mods(server_info.server_dir, mc_version, loader_type)
 
+            self._apply_icon(server_info.id, icon_source_path)
             self._show_success(server_info.id)
 
         except Exception as e:
@@ -1828,6 +1867,7 @@ class CreateServerDialog(Adw.Dialog):
         level_type,
         install_optimisations,
         port,
+        icon_source_path="",
     ):
         """Build the server on the host: its runtime, its loader and its settings."""
         from niksnaks_hosting.shared.backend.config_manager import ConfigManager
@@ -1913,7 +1953,18 @@ class CreateServerDialog(Adw.Dialog):
             self._update_progress(0.94, _("Installing server-optimising mods…"), "0/0")
             self._install_optimising_mods(server_info.server_dir, mc_version, loader_type, host=host)
 
+        self._apply_icon(server_info.id, icon_source_path)
         self._show_success(server_info.id)
+
+    def _apply_icon(self, server_id: str, icon_source_path: str) -> None:
+        """The manager writes it into the server's own folder, on whichever machine that is."""
+        if not icon_source_path:
+            return
+        self._update_progress(0.96, _("Applying server icon..."), "")
+        try:
+            self._server_manager.set_server_icon(server_id, icon_source_path)
+        except Exception:
+            pass
 
     def _install_optimising_mods(self, server_dir: Path, mc_version: str, loader_type: str, host=None) -> None:
         from niksnaks_hosting.shared.backend import modrinth_client

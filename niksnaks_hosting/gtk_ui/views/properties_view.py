@@ -1116,7 +1116,10 @@ class PropertiesView(Gtk.Box):
         self._saved_port = port
 
         owner = self._server_manager.find_port_conflict(
-            port, self._server_info.edition, exclude_server_id=self._server_info.id
+            port,
+            self._server_info.edition,
+            exclude_server_id=self._server_info.id,
+            host_id=self._server_info.host_id,
         )
         if owner:
             self._show_toast(_('Port {} is also used by "{}"').format(port, owner), timeout=4)
