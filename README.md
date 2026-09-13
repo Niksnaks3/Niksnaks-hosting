@@ -10,7 +10,7 @@ Create a Minecraft server in a few clicks — Java or Bedrock, any version — a
 handle the downloads, the Java runtime, the mods, and the backups.
 
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.3.2-brightgreen.svg)](https://github.com/Niksnaks3/Niksnaks-hosting/releases)
+[![Version](https://img.shields.io/badge/version-1.4.0-brightgreen.svg)](https://github.com/Niksnaks3/Niksnaks-hosting/releases)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey.svg)](#-installation)
 [![Python](https://img.shields.io/badge/python-3.13%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![GTK4](https://img.shields.io/badge/GTK-4%20%2F%20libadwaita-4A86CF.svg?logo=gnome&logoColor=white)](https://gtk.org/)

@@ -47,6 +47,23 @@
   <url type="homepage">https://github.com/Niksnaks3/Niksnaks-hosting</url>
   <url type="bugtracker">https://github.com/Niksnaks3/Niksnaks-hosting/issues</url>
   <releases>
+    <release version="1.4.0" date="2026-09-13">
+      <description>
+        <p>Reset the app, tidier hosts, and servers both computers can see:</p>
+        <ul>
+          <li>Reset Niksnaks-Hosting from Settings: deletes every server on this computer with its world, mods and backups, plus the settings, downloaded Java runtimes and cache. Servers on a host are forgotten, not deleted</li>
+          <li>Removing a host drops its servers from the list instead of leaving them stranded; "Clear all hosts" does that for every host at once and takes the app's login key back where the machine can be reached</li>
+          <li>A server started by the app on the other computer now shows as running here, streams its log, takes console commands and stops from here. A server created on a host shows up in that machine's own copy of the app too, and renaming, re-picturing or deleting it follows on both ends</li>
+          <li>Adding a host asks it for its servers straight away, so adopting them needs nothing typed in by hand</li>
+          <li>The Hosts dialog now checks whether each machine can be reached, and a host that is switched off no longer freezes the window</li>
+          <li>Quitting stops only the servers on this computer, and no longer shuts down servers on a host</li>
+          <li>Backups are no longer taken from a world that is still being written to</li>
+          <li>Fixed the Create Server button doing nothing, or freezing the window, once a computer had been added over SSH</li>
+          <li>The chosen server icon is applied when installing on a host, and importing a world onto a host is refused with a reason instead of silently dropped</li>
+          <li>Fixed "start on boot" silently doing nothing on some Windows hosts, and a firewall rule left behind after removing a server there</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.3.2" date="2026-08-29">
       <description>
         <p>Run your servers on another computer:</p>
