@@ -153,6 +153,18 @@ def unregister_pending_deletion(path: Path | str) -> None:
             _store_journal(remaining)
 
 
+def pending_deletions() -> list[str]:
+    """Every path still promised for deletion.
+
+    For a caller that has to take the journal apart and put the promise back together
+    afterwards -- a reset empties the data folder the journal itself lives in, and a
+    path outside that folder would otherwise lose the only thing that would ever
+    finish deleting it.
+    """
+    with _journal_lock:
+        return _load_journal()
+
+
 def delete_registered(path: Path | str, max_attempts: int = 1 + len(_RETRY_DELAYS)) -> bool:
     """Delete *path* and, once it is really gone, clear its journal entry.
 

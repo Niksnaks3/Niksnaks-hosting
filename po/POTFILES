@@ -48,3 +48,4 @@ niksnaks_hosting/shared/remote/rcon.py
 niksnaks_hosting/shared/remote/remote_adopt.py
 niksnaks_hosting/shared/remote/windows_task_service.py
 niksnaks_hosting/shared/remote/ownership.py
+niksnaks_hosting/shared/utils/factory_reset.py

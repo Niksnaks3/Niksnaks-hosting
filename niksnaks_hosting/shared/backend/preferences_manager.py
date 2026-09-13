@@ -43,6 +43,20 @@ class PreferencesManager:
         with open(self._settings_path, "w", encoding="utf-8") as f:
             json.dump(self._settings, f, indent=2)
 
+    def reset_to_defaults(self) -> None:
+        """Forget every setting, in memory as well as on disk.
+
+        The file alone is not enough: this object outlives a reset by however long the
+        app takes to close, and one stray setter in that window would write the old
+        values straight back out. Putting the defaults in first means the worst a
+        straggler can do is save a fresh install's settings.
+        """
+        self._settings = dict(DEFAULT_SETTINGS)
+        try:
+            self._settings_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
     @property
     def default_ram_mb(self) -> int:
         raw = int(self._settings.get("default_ram_mb", DEFAULT_RAM_MB))

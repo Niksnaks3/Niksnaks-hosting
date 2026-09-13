@@ -122,6 +122,14 @@ graphs in the same window.
   saves and backs it up, when that machine's app is closed — and it does so for every
   server running there, including the ones you started on it from over here.
 - **Per-server Java control** — pick a Java version and set custom JVM arguments.
+- **Reset the app** — **Settings → Reset** puts this install back to the day you got
+  it: every server on this computer goes, with its world, its mods and all of its
+  backups, and so do the settings, the downloaded Java runtimes and the cache. It is
+  permanent, there is no undo, and the button says so in red before you touch it.
+  Servers on a host over SSH are **not** deleted — they keep running exactly as they
+  are, nothing on those machines is touched, and the app just stops keeping track.
+  Hosts are forgotten too and the app's login key is taken back off each one it can
+  still reach, so add a machine again later and its servers come back.
 
 ### Polish
 
