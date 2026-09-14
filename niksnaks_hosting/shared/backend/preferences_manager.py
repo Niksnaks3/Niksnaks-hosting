@@ -18,6 +18,8 @@ DEFAULT_SETTINGS = {
     "curseforge_api_key": "",
     "theme": "system",
     "language": "system",
+    "web_panel_enabled": False,
+    "web_panel_port": 8080,
 }
 
 class PreferencesManager:
@@ -149,4 +151,26 @@ class PreferencesManager:
     @language.setter
     def language(self, value: str) -> None:
         self._settings["language"] = value
+        self._save()
+
+    @property
+    def web_panel_enabled(self) -> bool:
+        return bool(self._settings.get("web_panel_enabled", False))
+
+    @web_panel_enabled.setter
+    def web_panel_enabled(self, value: bool) -> None:
+        self._settings["web_panel_enabled"] = bool(value)
+        self._save()
+
+    @property
+    def web_panel_port(self) -> int:
+        try:
+            port = int(self._settings.get("web_panel_port", 8080))
+        except (TypeError, ValueError):
+            port = 8080
+        return port if 1 <= port <= 65535 else 8080
+
+    @web_panel_port.setter
+    def web_panel_port(self, value: int) -> None:
+        self._settings["web_panel_port"] = max(1, min(65535, int(value)))
         self._save()

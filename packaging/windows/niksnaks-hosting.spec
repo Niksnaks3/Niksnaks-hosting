@@ -143,6 +143,9 @@ for theme in ("Adwaita", "hicolor"):
 
 # --- Application resources ---------------------------------------------------
 datas.append((str(PROJECT / "niksnaks_hosting" / "gtk_ui" / "style.css"), "niksnaks_hosting/gtk_ui"))
+# The web panel's page: served straight from the package folder, so it ships beside it.
+for asset in (PROJECT / "niksnaks_hosting" / "web" / "static").iterdir():
+    datas.append((str(asset), "niksnaks_hosting/web/static"))
 
 # App/symbolic icons: the dev-layout path (parents[3]/packaging/linux) is kept so
 # the same lookups work frozen, and a hicolor copy makes them theme-visible.

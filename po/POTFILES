@@ -49,3 +49,6 @@ niksnaks_hosting/shared/remote/remote_adopt.py
 niksnaks_hosting/shared/remote/windows_task_service.py
 niksnaks_hosting/shared/remote/ownership.py
 niksnaks_hosting/shared/utils/factory_reset.py
+niksnaks_hosting/gtk_ui/dialogs/web_panel.py
+niksnaks_hosting/shared/backend/mod_installer.py
+niksnaks_hosting/web/panel.py

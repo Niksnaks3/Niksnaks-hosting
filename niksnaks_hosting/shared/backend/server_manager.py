@@ -19,6 +19,7 @@ from niksnaks_hosting.shared.backend.playit_config import load_playit_config
 from niksnaks_hosting.shared.backend.playit_manager import PlayitManager
 from niksnaks_hosting.shared.backend.preferences_manager import PreferencesManager
 from niksnaks_hosting.shared.backend.server_process import ServerProcess, running_server_pids
+from niksnaks_hosting.shared.backend.stats import ServerStats
 from niksnaks_hosting.shared.core.events import EventEmitter
 from niksnaks_hosting.shared.utils.constants import (
     BEDROCK_BINARY_NAMES,
@@ -27,6 +28,7 @@ from niksnaks_hosting.shared.utils.constants import (
     BEDROCK_WORLDS_DIR,
     CONFIG_FILE,
     DEFAULT_RAM_MB,
+    DEFAULT_SERVER_PORT,
     EDITION_BEDROCK,
     EDITION_JAVA,
     LOADER_FABRIC,
@@ -36,6 +38,7 @@ from niksnaks_hosting.shared.utils.constants import (
     MIN_SERVER_PORT,
     SERVERS_DIR,
     USER_ICON_FILE,
+    ServerStatus,
     default_port_for_edition,
     get_forge_full_version,
     get_required_java_version,
@@ -298,12 +301,24 @@ def _host_record(info: ServerInfo) -> dict:
     return record
 
 
+@dataclass
+class StartRefusal:
+    """Why start_server did not start a server. *kind* is one of missing/busy/mods/port."""
+
+    kind: str
+    message: str
+    port_type: str = ""
+    port: int = 0
+    own_port: bool = False
+
+
 class ServerManager(EventEmitter):
     def __init__(self):
         super().__init__()
         self._servers: dict[str, ServerInfo] = {}
         self._processes: dict[str, ServerProcess] = {}
         self._mods_operation_counts: dict[str, int] = {}
+        self._stats: dict[str, ServerStats] = {}
         self._remote_java: dict[str, object] = {}
         # A server's picture lives in its folder, which for a remote one is an SFTP read
         # per look. The sidebar looks every time a row is rebuilt, so the answer is kept.
@@ -2028,6 +2043,17 @@ class ServerManager(EventEmitter):
     def get_existing_process(self, server_id: str) -> ServerProcess | None:
         return self._processes.get(server_id)
 
+    def get_stats(self, server_id: str) -> ServerStats | None:
+        """The one ServerStats for this server's process, made on first use."""
+        process = self.get_process(server_id)
+        if not process:
+            return None
+        stats = self._stats.get(server_id)
+        if stats is None or stats.process is not process:
+            stats = ServerStats(process)
+            self._stats[server_id] = stats
+        return stats
+
     def get_config(self, server_id: str) -> ConfigManager | None:
         info = self._servers.get(server_id)
         if not info:
@@ -2291,6 +2317,88 @@ class ServerManager(EventEmitter):
         if not server_id:
             return False
         return int(self._mods_operation_counts.get(server_id, 0)) > 0
+
+    def start_server(self, server_id: str) -> StartRefusal | None:
+        """Start a server after the checks every front end has to make first.
+
+        Returns None once the process has been asked to start, or a StartRefusal that
+        says why it was not. The refusal carries the facts (which port, whose) as well
+        as a finished sentence, so the GTK window can keep its own dialog wording and
+        the web panel can show the sentence as it is.
+        """
+        info = self._servers.get(server_id)
+        process = self.get_process(server_id)
+        if not info or not process:
+            return StartRefusal("missing", _("This server no longer exists."))
+        if process.status in (ServerStatus.STARTING, ServerStatus.RUNNING, ServerStatus.STOPPING):
+            return StartRefusal("busy", _("The server is already running."))
+        if self.is_mod_operation_active(server_id):
+            return StartRefusal(
+                "mods", _("Mods are currently being installed or updated. Please wait for the operation to finish.")
+            )
+
+        bedrock = is_bedrock(info.edition)
+        port = self.check_port_conflict(server_id)
+        if port is not None:
+            return self._port_refusal("Bedrock" if bedrock else "Java", port, server_id, own_port=True)
+        if not bedrock:
+            port = self.check_bedrock_port_conflict(server_id)
+            if port is not None:
+                return self._port_refusal("Bedrock", port, server_id)
+            port = self.check_voicechat_port_conflict(server_id)
+            if port is not None:
+                return self._port_refusal("Voice Chat", port, server_id)
+            self.playit_manager.configure_voicechat_mod(
+                str(info.server_dir), server_id, voicechat_port=self.get_voicechat_port(server_id)
+            )
+        process.start()
+        return None
+
+    def restart_server(self, server_id: str) -> None:
+        """Stop, wait for the world to be saved, then start again -- on a worker thread."""
+        process = self.get_process(server_id)
+        if not process:
+            return
+
+        def worker() -> None:
+            process.stop_and_wait()
+            self.start_server(server_id)
+
+        threading.Thread(target=worker, daemon=True, name=f"restart-{server_id}").start()
+
+    def _port_refusal(self, port_type: str, port: int, server_id: str, own_port: bool = False) -> StartRefusal:
+        holder = self.running_server_name_on_port(port_type, port, server_id)
+        # The server's own listening port lives in server.properties; the Bedrock and voice
+        # chat ports belong to the tunnels, which are edited where the tunnels are managed.
+        if own_port:
+            where = _("To change the port, open the Properties tab and edit the port under Network.")
+        else:
+            where = _(
+                "To change the port, open the {} tunnel management dialog in Connect view and edit the local port."
+            ).format(port_type)
+        message = _("{} port {} is already in use by {}. A server is already running on this port.\n\n{}").format(
+            port_type, port, holder, where
+        )
+        return StartRefusal("port", message, port_type=port_type, port=port, own_port=own_port)
+
+    def running_server_name_on_port(self, port_type: str, port: int, except_id: str = "") -> str:
+        """'"Name"' of the running server holding *port*, or a translated 'another server'."""
+        for sid, info in self._servers.items():
+            if sid == except_id:
+                continue
+            proc = self._processes.get(sid)
+            if not proc or not proc.is_running:
+                continue
+            if port_type == "Java":
+                cfg = self.get_config(sid)
+                held = bool(cfg) and cfg.try_load() and cfg.get_int("server-port", DEFAULT_SERVER_PORT) == port
+            elif port_type == "Bedrock":
+                held = self.get_bedrock_port(sid) == port
+            else:
+                held = self.get_voicechat_port(sid) == port
+            if held:
+                return f'"{info.name}"'
+        return _("another server")
 
     def stop_all(self):
         """Last-resort stop for teardown that cannot afford to wait.

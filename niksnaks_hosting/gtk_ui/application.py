@@ -29,6 +29,7 @@ class NiksnaksHostingApplication(Adw.Application):
         )
         self._server_manager = None
         self._window = None
+        self._web_panel = None
         self._activate_in_background = False
         self._is_held_for_background = False
         self._tray_manager = None
@@ -53,6 +54,13 @@ class NiksnaksHostingApplication(Adw.Application):
         self._server_manager = ServerManager()
 
         set_language(self._server_manager.preferences.language)
+
+        # The web panel, when it is switched on, lives on the application rather than
+        # the window: hiding the window into the background must not take it down.
+        from niksnaks_hosting.web.panel import WebPanel
+
+        self._web_panel = WebPanel(self._server_manager)
+        self.apply_web_panel_settings()
 
         # Deletions a previous run promised but never carried out -- quit inside an
         # undo window, or a file that stayed locked -- are finished here, before the
@@ -156,6 +164,8 @@ class NiksnaksHostingApplication(Adw.Application):
 
         if self._window:
             self._window.shutdown_background()
+        if self._web_panel:
+            self._web_panel.stop()
         if self._server_manager:
             self._server_manager.stop_all()
             # A delete whose undo toast the quit cut short gets one quick pass now
@@ -227,6 +237,10 @@ class NiksnaksHostingApplication(Adw.Application):
         action_hosts.connect("activate", self._on_hosts)
         self.add_action(action_hosts)
 
+        action_web = Gio.SimpleAction.new("web-panel", None)
+        action_web.connect("activate", self._on_web_panel)
+        self.add_action(action_web)
+
         action_shortcuts = Gio.SimpleAction.new("shortcuts", None)
         action_shortcuts.connect("activate", self._on_shortcuts)
         self.add_action(action_shortcuts)
@@ -287,6 +301,23 @@ class NiksnaksHostingApplication(Adw.Application):
 
         if self._window:
             show_preferences_window(self._window, self._server_manager.preferences, self._server_manager)
+
+    def _on_web_panel(self, action, param):
+        from niksnaks_hosting.gtk_ui.dialogs.web_panel import show_web_panel_dialog
+
+        if self._window:
+            show_web_panel_dialog(self._window, self, self._web_panel, self._server_manager)
+
+    def apply_web_panel_settings(self) -> str:
+        """Start, move or stop the web panel to match the preferences. Returns a problem, or ''."""
+        prefs = self._server_manager.preferences
+        if not prefs.web_panel_enabled:
+            self._web_panel.stop()
+            return ""
+        if self._web_panel.is_running and self._web_panel.port == prefs.web_panel_port:
+            return ""
+        ok, message = self._web_panel.start(prefs.web_panel_port)
+        return "" if ok else message
 
     def _on_hosts(self, action, param):
         from niksnaks_hosting.gtk_ui.dialogs.hosts import show_hosts_dialog

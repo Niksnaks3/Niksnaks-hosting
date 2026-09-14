@@ -14,6 +14,7 @@ from gi.repository import Adw, Gdk, GdkPixbuf, GLib, Gtk, Pango
 from ..utils import *
 from niksnaks_hosting.gtk_ui.dialogs.progress_dialog import ProgressDialog
 from niksnaks_hosting.shared.utils.constants import LOADER_FABRIC, get_loader_display_name, normalize_loader
+from niksnaks_hosting.shared.backend import mod_installer
 
 class ModrinthMixin:
     def _server_loader(self) -> str:
@@ -435,35 +436,13 @@ class ModrinthMixin:
     def _configure_known_mod_after_download(self, hit) -> None:
         if not self._server_manager or not self._server_info:
             return
-        slug = str(getattr(hit, "slug", "") or "").strip().lower()
-        title = str(getattr(hit, "title", "") or "").strip().lower()
-        project_id = str(getattr(hit, "project_id", "") or "").strip().lower()
-        identifiers = {slug, title.replace(" ", "-"), project_id}
-        playit = self._server_manager.playit_manager
-        server_dir = str(self._server_info.server_dir)
-
-        if "geyser" in identifiers:
-            playit.configure_geyser_mod(server_dir)
-            return
-
-        if "floodgate" in identifiers:
-            playit.configure_floodgate_mod(server_dir)
-            return
-
-        if "simple-voice-chat" in identifiers or "voice-chat" in identifiers:
-            try:
-                from niksnaks_hosting.shared.backend.playit_config import load_playit_config
-
-                cfg = load_playit_config(self._server_info.server_dir)
-                endpoint = str(cfg.get("voicechat_endpoint", "")).strip()
-            except Exception:
-                endpoint = ""
-            playit.configure_voicechat_mod(
-                server_dir,
-                self._server_info.id,
-                endpoint=endpoint,
-                voicechat_port=int(cfg.get("voicechat_port", 24454)),
-            )
+        mod_installer.configure_known_mod(
+            self._server_manager,
+            self._server_info,
+            slug=str(getattr(hit, "slug", "") or ""),
+            title=str(getattr(hit, "title", "") or ""),
+            project_id=str(getattr(hit, "project_id", "") or ""),
+        )
 
     def _load_icon_async(self, image: Gtk.Image, url: str, size: int = 44) -> None:
         def worker():
@@ -966,13 +945,6 @@ class ModrinthMixin:
         def ui_ok(fname: str, dep_count: int):
             _finish_progress()
             _set_btns(_("Installed"), False)
-            self._record_individual_mod_install(
-                hit.project_id,
-                hit.title,
-                chosen.version_id,
-                chosen.filename,
-                version_number=chosen.version_number,
-            )
             if dep_count > 0:
                 self._toast(_("Installed {} required dependencies").format(dep_count))
             self._toast(_("Installed {}").format(fname))
@@ -989,67 +961,18 @@ class ModrinthMixin:
 
         def thread_fn(deps_to_install: list, all_required_deps: list):
             progress = progress_slot[0]
-            # Each file gets an equal slice of the bar and fills its own slice by bytes,
-            # so a lone jar still moves instead of sitting at 0% and jumping to done.
-            total_files = len(deps_to_install) + 1
 
-            def report_file(index: int, name: str):
-                def on_bytes(done: int, size: int) -> None:
-                    if not progress:
-                        return
-                    share = (done / size) if size else 0.0
-                    progress.update(
-                        (index + share) / total_files,
-                        detail=(
-                            _("{name} — {n} of {total}").format(name=name, n=index + 1, total=total_files)
-                            if total_files > 1
-                            else name
-                        ),
-                    )
-
-                return on_bytes
+            def report(fraction: float, detail: str) -> None:
+                if progress:
+                    progress.update(fraction, detail=detail)
 
             try:
                 root = self._server_dir()
                 if not root:
                     raise RuntimeError("No server selected.")
-
-                mods_dir = root / "mods"
-                mods_dir.mkdir(parents=True, exist_ok=True)
-                installed_names_local = {p.name.lower() for p in mods_dir.glob("*.jar")}
-
-                old_state = self._read_individual_mod_state().get("mods", {}).get(hit.project_id, None)
-                if old_state:
-                    old_filename = old_state.get("filename", "")
-                    if old_filename and old_filename.lower() != chosen.filename.lower():
-                        old_path = mods_dir / old_filename
-                        if old_path.exists():
-                            old_path.unlink(missing_ok=True)
-                        installed_names_local.discard(old_filename.lower())
-
-                installed_dep_count = 0
-                for position, dep in enumerate(deps_to_install):
-                    dep_name = dep.filename.lower()
-                    if dep_name in installed_names_local:
-                        continue
-                    if dep_name == chosen.filename.lower():
-                        continue
-                    dep_dest = mods_dir / dep.filename
-                    modrinth_client.download_to(
-                        dep.download_url,
-                        dep_dest,
-                        on_bytes=report_file(position, dep.filename),
-                    )
-                    installed_names_local.add(dep_name)
-                    installed_dep_count += 1
-
-                dest = mods_dir / chosen.filename
-                modrinth_client.download_to(
-                    chosen.download_url,
-                    dest,
-                    on_bytes=report_file(len(deps_to_install), chosen.filename),
+                installed_dep_count = mod_installer.download_mod(
+                    root, hit.project_id, hit.title, chosen, deps_to_install, all_required_deps, progress=report
                 )
-                self._record_dependency_installs(chosen.filename, all_required_deps)
                 self._configure_known_mod_after_download(hit)
                 GLib.idle_add(lambda f=chosen.filename, c=installed_dep_count: ui_ok(f, c))
             except Exception as e:
@@ -1098,24 +1021,7 @@ class ModrinthMixin:
                 root = self._server_dir()
                 if not root:
                     raise RuntimeError("No server selected.")
-
-                mods_dir = root / "mods"
-                mods_dir.mkdir(parents=True, exist_ok=True)
-                installed_names_local = {p.name.lower() for p in mods_dir.glob("*.jar")}
-                deps = modrinth_client.resolve_required_dependencies(
-                    chosen.version_id,
-                    mc_version,
-                    loader=self._server_loader(),
-                )
-                deps_to_install = []
-                for dep in deps:
-                    dep_name = dep.filename.lower()
-                    if dep_name in installed_names_local:
-                        continue
-                    if dep_name == chosen.filename.lower():
-                        continue
-                    deps_to_install.append(dep)
-
+                deps_to_install, deps = mod_installer.plan_dependencies(root, chosen, mc_version, self._server_loader())
                 GLib.idle_add(lambda d=deps_to_install, a=deps: prompt_dependencies(d, a))
             except Exception as e:
                 GLib.idle_add(lambda m=str(e): ui_err(m))

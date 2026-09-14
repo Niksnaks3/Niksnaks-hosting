@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import ast
-import json
 import threading
 import uuid
 from pathlib import Path
@@ -14,6 +12,8 @@ gi.require_version("Adw", "1")
 gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Adw, GLib, Gtk
+
+from niksnaks_hosting.shared.backend.mod_installer import ModState, find_jar
 
 from ..utils import *
 
@@ -39,29 +39,8 @@ class ModsMixin:
         if server_id and self._server_manager:
             self._server_manager.end_mod_operation(server_id)
 
-    def _mod_dependency_state_path(self) -> Path | None:
-        root = self._server_dir()
-        if not root:
-            return None
-        return root / ".niksnaks-hosting-mod-dependencies.json"
-
-    def _modpack_state_path(self) -> Path | None:
-        root = self._server_dir()
-        if not root:
-            return None
-        return root / ".niksnaks-hosting-modpacks.json"
-
-    def _individual_mod_state_path(self) -> Path | None:
-        root = self._server_dir()
-        if not root:
-            return None
-        return root / ".niksnaks-hosting-mod-installs.json"
-
-    def _datapack_state_path(self) -> Path | None:
-        root = self._server_dir()
-        if not root:
-            return None
-        return root / ".niksnaks-hosting-datapack-installs.json"
+    def _mod_state(self) -> ModState:
+        return ModState(self._server_dir())
 
     def _datapacks_dir(self) -> Path | None:
         root = self._server_dir()
@@ -82,47 +61,10 @@ class ModsMixin:
         return root / world_name / "datapacks"
 
     def _read_datapack_state(self) -> dict:
-        path = self._datapack_state_path()
-        if not path or not path.exists():
-            return {"datapacks": {}}
-        try:
-            with open(path, encoding="utf-8") as f:
-                raw = json.load(f)
-            if not isinstance(raw, dict):
-                return {"datapacks": {}}
-            dp_raw = raw.get("datapacks") if isinstance(raw.get("datapacks"), dict) else {}
-            cleaned: dict[str, dict[str, str]] = {}
-            for project_id, item in dp_raw.items():
-                pid = str(project_id).strip()
-                if not pid or not isinstance(item, dict):
-                    continue
-                title = str(item.get("title", "")).strip()
-                version_id = str(item.get("version_id", "")).strip()
-                version_number = str(item.get("version_number", "")).strip()
-                filename = str(item.get("filename", "")).strip()
-                if not filename:
-                    continue
-                cleaned[pid] = {
-                    "title": title,
-                    "version_id": version_id,
-                    "version_number": version_number,
-                    "filename": filename,
-                }
-            return {"datapacks": cleaned}
-        except Exception:
-            return {"datapacks": {}}
+        return self._mod_state().read_datapacks()
 
     def _write_datapack_state(self, state: dict) -> bool:
-        path = self._datapack_state_path()
-        if not path:
-            return False
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2)
-            return True
-        except Exception:
-            return False
+        return self._mod_state().write_datapacks(state)
 
     def _record_datapack_install(
         self,
@@ -132,18 +74,7 @@ class ModsMixin:
         filename: str,
         version_number: str = "",
     ) -> None:
-        pid = str(project_id).strip()
-        if not pid:
-            return
-        state = self._read_datapack_state()
-        dps = state.setdefault("datapacks", {})
-        dps[pid] = {
-            "title": str(title or "").strip(),
-            "version_id": str(version_id or "").strip(),
-            "version_number": str(version_number or "").strip(),
-            "filename": str(filename or "").strip(),
-        }
-        self._write_datapack_state(state)
+        self._mod_state().record_datapack(project_id, title, version_id, filename, version_number)
 
     def _is_datapack_installed(self, project_id: str) -> bool:
         pid = str(project_id).strip()
@@ -229,166 +160,19 @@ class ModsMixin:
         self._toast(_("Deleted {}{}").format(title, suffix))
 
     def _read_modpack_state(self) -> dict:
-        path = self._modpack_state_path()
-        if not path or not path.exists():
-            return {"installed_projects": {}}
-
-        try:
-            with open(path, encoding="utf-8") as f:
-                raw = json.load(f)
-            if isinstance(raw, dict):
-                projects = raw.get("installed_projects")
-                if isinstance(projects, dict):
-                    normalized: dict[str, dict[str, Any]] = {}
-                    for project_id, value in projects.items():
-                        pid = str(project_id).strip()
-                        if not pid:
-                            continue
-
-                        item = value
-
-                        if isinstance(item, str):
-                            text = item.strip()
-                            if text.startswith("{") and text.endswith("}"):
-                                try:
-                                    recovered = ast.literal_eval(text)
-                                    if isinstance(recovered, dict):
-                                        item = recovered
-                                except Exception:
-                                    pass
-
-                        if isinstance(item, dict):
-                            version_id = str(item.get("version_id", "")).strip()
-                            version_number = str(item.get("version_number", "")).strip()
-                            title = str(item.get("title", "")).strip()
-                            mods_raw = item.get("mods") if isinstance(item.get("mods"), list) else []
-                            mods = sorted(
-                                {
-                                    str(Path(str(m)).name).strip().lower()
-                                    for m in mods_raw
-                                    if str(m).strip().lower().endswith(".jar")
-                                }
-                            )
-                            normalized[pid] = {
-                                "version_id": version_id,
-                                "version_number": version_number,
-                                "title": title,
-                                "mods": mods,
-                            }
-                        else:
-
-                            normalized[pid] = {
-                                "version_id": str(item).strip(),
-                                "version_number": "",
-                                "title": "",
-                                "mods": [],
-                            }
-                    return {"installed_projects": normalized}
-        except Exception:
-            pass
-
-        return {"installed_projects": {}}
+        return self._mod_state().read_modpacks()
 
     def _modpack_entries(self) -> dict[str, dict[str, Any]]:
-        state = self._read_modpack_state()
-        projects = state.get("installed_projects", {})
-        if not isinstance(projects, dict):
-            return {}
-
-        out: dict[str, dict[str, Any]] = {}
-        for project_id, value in projects.items():
-            pid = str(project_id).strip()
-            if not pid:
-                continue
-
-            if isinstance(value, dict):
-                version_id = str(value.get("version_id", "")).strip()
-                version_number = str(value.get("version_number", "")).strip()
-                title = str(value.get("title", "")).strip()
-                mods_raw = value.get("mods") if isinstance(value.get("mods"), list) else []
-                mods = sorted(
-                    {
-                        str(Path(str(m)).name).strip().lower()
-                        for m in mods_raw
-                        if str(m).strip().lower().endswith(".jar")
-                    }
-                )
-            else:
-                version_id = str(value).strip()
-                version_number = ""
-                title = ""
-                mods = []
-
-            out[pid] = {
-                "version_id": version_id,
-                "version_number": version_number,
-                "title": title,
-                "mods": mods,
-            }
-
-        return out
+        return self._read_modpack_state()["installed_projects"]
 
     def _modpack_managed_mod_map(self) -> dict[str, list[str]]:
-        managed: dict[str, list[str]] = {}
-        for project_id, entry in self._modpack_entries().items():
-            label = str(entry.get("title", "")).strip() or project_id
-            for mod_name in entry.get("mods", []):
-                key = str(mod_name).strip().lower()
-                if not key:
-                    continue
-                names = managed.setdefault(key, [])
-                if label not in names:
-                    names.append(label)
-        return managed
+        return self._mod_state().modpack_managed_mods()
 
     def _read_individual_mod_state(self) -> dict:
-        path = self._individual_mod_state_path()
-        if not path or not path.exists():
-            return {"mods": {}}
-
-        try:
-            with open(path, encoding="utf-8") as f:
-                raw = json.load(f)
-            if not isinstance(raw, dict):
-                return {"mods": {}}
-
-            mods_raw = raw.get("mods") if isinstance(raw.get("mods"), dict) else {}
-            cleaned: dict[str, dict[str, str]] = {}
-            for project_id, item in mods_raw.items():
-                pid = str(project_id).strip()
-                if not pid or not isinstance(item, dict):
-                    continue
-
-                title = str(item.get("title", "")).strip()
-                version_id = str(item.get("version_id", "")).strip()
-                version_number = str(item.get("version_number", "")).strip()
-                filename = str(item.get("filename", "")).strip()
-                if not filename:
-                    continue
-
-                cleaned[pid] = {
-                    "title": title,
-                    "version_id": version_id,
-                    "version_number": version_number,
-                    "filename": filename,
-                }
-
-            return {"mods": cleaned}
-        except Exception:
-            return {"mods": {}}
+        return self._mod_state().read_mods()
 
     def _write_individual_mod_state(self, state: dict) -> bool:
-        path = self._individual_mod_state_path()
-        if not path:
-            return False
-
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2)
-            return True
-        except Exception:
-            return False
+        return self._mod_state().write_mods(state)
 
     def _record_individual_mod_install(
         self,
@@ -398,31 +182,10 @@ class ModsMixin:
         filename: str,
         version_number: str = "",
     ) -> None:
-        pid = str(project_id).strip()
-        if not pid:
-            return
-
-        state = self._read_individual_mod_state()
-        mods = state.setdefault("mods", {})
-        mods[pid] = {
-            "title": str(title or "").strip(),
-            "version_id": str(version_id or "").strip(),
-            "version_number": str(version_number or "").strip(),
-            "filename": str(filename or "").strip(),
-        }
-        self._write_individual_mod_state(state)
+        self._mod_state().record_mod(project_id, title, version_id, filename, version_number)
 
     def _write_modpack_state(self, state: dict) -> bool:
-        path = self._modpack_state_path()
-        if not path:
-            return False
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2)
-            return True
-        except Exception:
-            return False
+        return self._mod_state().write_modpacks(state)
 
     def _record_modpack_install(
         self,
@@ -432,25 +195,7 @@ class ModsMixin:
         title: str = "",
         mod_files: list[str] | None = None,
     ) -> None:
-        pid = str(project_id).strip()
-        if not pid:
-            return
-        state = self._read_modpack_state()
-        projects = state.setdefault("installed_projects", {})
-        normalized_mods = sorted(
-            {
-                str(Path(str(m)).name).strip().lower()
-                for m in (mod_files or [])
-                if str(m).strip().lower().endswith(".jar")
-            }
-        )
-        projects[pid] = {
-            "version_id": str(version_id).strip(),
-            "version_number": str(version_number or "").strip(),
-            "title": str(title or "").strip(),
-            "mods": normalized_mods,
-        }
-        self._write_modpack_state(state)
+        self._mod_state().record_modpack(project_id, version_id, version_number, title, mod_files)
 
     def _is_modpack_installed(self, project_id: str) -> bool:
         pid = str(project_id).strip()
@@ -460,48 +205,10 @@ class ModsMixin:
         return pid in entries
 
     def _find_mod_jar_path(self, mods_dir: Path, filename: str) -> Path | None:
-        name = str(filename).strip()
-        if not name:
-            return None
-
-        direct = mods_dir / name
-        if direct.exists():
-            return direct
-
-        name_l = name.lower()
-        for jar in mods_dir.glob("*.jar"):
-            if jar.name.lower() == name_l:
-                return jar
-        return None
+        return find_jar(mods_dir.parent, filename)
 
     def _remove_mod_from_mod_states(self, removed_filename: str) -> None:
-        key = str(removed_filename).strip().lower()
-        if not key:
-            return
-
-        self._remove_mod_from_dependency_state(removed_filename)
-
-        standalone = self._read_individual_mod_state()
-        mods = dict(standalone.get("mods", {}))
-        kept = {}
-        for project_id, meta in mods.items():
-            fname = str((meta or {}).get("filename", "")).strip().lower()
-            if fname == key:
-                continue
-            kept[project_id] = meta
-        self._write_individual_mod_state({"mods": kept})
-
-        entries = self._modpack_entries()
-        projects_payload: dict[str, dict[str, Any]] = {}
-        for project_id, entry in entries.items():
-            mods = [m for m in entry.get("mods", []) if str(m).strip().lower() != key]
-            projects_payload[project_id] = {
-                "version_id": str(entry.get("version_id", "")).strip(),
-                "version_number": str(entry.get("version_number", "")).strip(),
-                "title": str(entry.get("title", "")).strip(),
-                "mods": mods,
-            }
-        self._write_modpack_state({"installed_projects": projects_payload})
+        self._mod_state().forget_mod(removed_filename)
 
     def _ensure_modpack_version_numbers_async(self) -> None:
         if self._modpack_version_enrich_busy:
@@ -558,144 +265,16 @@ class ModsMixin:
         threading.Thread(target=worker, daemon=True).start()
 
     def _read_mod_dependency_state(self) -> dict:
-        path = self._mod_dependency_state_path()
-        if not path or not path.exists():
-            return {"required_by": {}}
-
-        try:
-            with open(path, encoding="utf-8") as f:
-                raw = json.load(f)
-            if isinstance(raw, dict):
-                req = raw.get("required_by")
-                if isinstance(req, dict):
-                    cleaned = {}
-                    for dep_name, parents in req.items():
-                        dep_key = str(dep_name).strip().lower()
-                        if not dep_key:
-                            continue
-                        if not isinstance(parents, list):
-                            continue
-                        parent_keys = sorted({str(p).strip().lower() for p in parents if str(p).strip()})
-                        if parent_keys:
-                            cleaned[dep_key] = parent_keys
-                    return {"required_by": cleaned}
-        except Exception:
-            pass
-
-        return {"required_by": {}}
+        return self._mod_state().read_dependencies()
 
     def _write_mod_dependency_state(self, state: dict) -> bool:
-        path = self._mod_dependency_state_path()
-        if not path:
-            return False
-
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2)
-            return True
-        except Exception:
-            return False
+        return self._mod_state().write_dependencies(state)
 
     def _record_dependency_installs(self, parent_filename: str, dep_versions: list) -> None:
-        parent_key = str(parent_filename).strip().lower()
-        if not parent_key or not dep_versions:
-            return
-
-        state = self._read_mod_dependency_state()
-        req = state.setdefault("required_by", {})
-        for dep in dep_versions:
-            dep_key = str(getattr(dep, "filename", "")).strip().lower()
-            if not dep_key or dep_key == parent_key:
-                continue
-            parents = set(req.get(dep_key, []))
-            parents.add(parent_key)
-            req[dep_key] = sorted(parents)
-
-            dep_project_id = str(getattr(dep, "project_id", "")).strip()
-            dep_title = str(getattr(dep, "title", "") or getattr(dep, "name", "") or dep_project_id or dep_key).strip()
-            dep_version_id = str(getattr(dep, "version_id", "")).strip()
-            dep_version_number = str(getattr(dep, "version_number", "")).strip()
-            dep_filename = str(getattr(dep, "filename", "")).strip()
-            if dep_project_id and dep_filename:
-                self._record_individual_mod_install(
-                    dep_project_id,
-                    dep_title or dep_project_id,
-                    dep_version_id,
-                    dep_filename,
-                    version_number=dep_version_number,
-                )
-
-        self._write_mod_dependency_state(state)
-
-    def _remove_mod_from_dependency_state(self, removed_filename: str) -> None:
-        removed_key = str(removed_filename).strip().lower()
-        if not removed_key:
-            return
-
-        state = self._read_mod_dependency_state()
-        req = dict(state.get("required_by", {}))
-        req.pop(removed_key, None)
-
-        new_req = {}
-        for dep_key, parents in req.items():
-            filtered = [p for p in parents if p != removed_key]
-            if filtered:
-                new_req[dep_key] = filtered
-
-        self._write_mod_dependency_state({"required_by": new_req})
+        self._mod_state().record_dependencies(parent_filename, dep_versions)
 
     def _dependency_dependents(self, filename: str) -> list[str]:
-        key = str(filename).strip().lower()
-        if not key:
-            return []
-        state = self._read_mod_dependency_state()
-        req = state.get("required_by", {})
-        parents = list(req.get(key, []))
-
-        root = self._server_dir()
-        if not root:
-            return parents
-        mods_dir = root / "mods"
-        installed = {p.name.lower() for p in mods_dir.glob("*.jar")} if mods_dir.is_dir() else set()
-        return [p for p in parents if p in installed]
-
-    def _cleanup_orphaned_dependencies(self, removed_mod_filename: str) -> None:
-        removed_key = str(removed_mod_filename).strip().lower()
-        if not removed_key:
-            return
-
-        root = self._server_dir()
-        if not root:
-            return
-
-        mods_dir = root / "mods"
-        if not mods_dir.is_dir():
-            return
-
-        state = self._read_mod_dependency_state()
-        req = state.get("required_by", {})
-
-        deps_to_check = []
-
-        for dep_key, parents in req.items():
-            if removed_key not in parents:
-                continue
-            deps_to_check.append(dep_key)
-
-        for dep_key in deps_to_check:
-            parents = req.get(dep_key, [])
-
-            remaining_parents = [p for p in parents if p != removed_key]
-
-            if not remaining_parents:
-
-                try:
-                    dep_path = self._find_mod_jar_path(mods_dir, dep_key)
-                    if dep_path and dep_path.exists():
-                        dep_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
+        return self._mod_state().dependents_of(filename)
 
     def _make_mod_row(self, jar: Path) -> Adw.ActionRow:
         filename_lower = jar.name.lower()
@@ -1226,9 +805,6 @@ class ModsMixin:
                     if old_path and old_path.exists():
                         old_path.unlink(missing_ok=True)
                     self._remove_mod_from_mod_states(old_name)
-
-                    self._cleanup_orphaned_dependencies(old_name)
-                    self._remove_mod_from_dependency_state(old_name)
 
                 self._record_individual_mod_install(
                     project_id,

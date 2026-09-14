@@ -111,6 +111,10 @@ class RemoteServerProcess(ServerProcess):
             return self._service
 
     @property
+    def is_remote(self) -> bool:
+        return True
+
+    @property
     def pid(self) -> int | None:
         return self._pid
 

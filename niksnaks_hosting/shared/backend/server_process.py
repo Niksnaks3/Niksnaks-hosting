@@ -300,6 +300,11 @@ class ServerProcess(EventEmitter):
         return is_bedrock(self.edition)
 
     @property
+    def is_remote(self) -> bool:
+        """True when the process lives on another machine, so its pid means nothing here."""
+        return False
+
+    @property
     def command_echoes_back(self) -> bool:
         """Whether a command sent from here will come back in this server's output.
 

@@ -1,6 +1,3 @@
-import re
-import time
-
 import gi
 
 gi.require_version("Gtk", "4.0")
@@ -8,14 +5,7 @@ gi.require_version("Adw", "1")
 import cairo
 from gi.repository import Adw, GLib, Gtk
 
-try:
-    import psutil
-
-    HAS_PSUTIL = True
-except ImportError:
-    HAS_PSUTIL = False
-
-from niksnaks_hosting.shared.backend.server_process import ServerProcess
+from niksnaks_hosting.shared.backend.stats import ServerStats
 
 class SparklineWidget(Gtk.DrawingArea):
     def __init__(self, color_rgb=(0.22, 0.53, 0.91), max_points=60):
@@ -118,12 +108,8 @@ class MetricCard(Gtk.Box):
 class PerformanceView(Gtk.Box):
     def __init__(self):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self._process = None
+        self._stats: ServerStats | None = None
         self._timer_id = None
-        self._psutil_process = None
-        self._tps_value = 20.0
-        self._tps_handler_id = None
-        self._cpu_count = (psutil.cpu_count() or 1) if HAS_PSUTIL else 1
 
         self._scrolled = Gtk.ScrolledWindow()
         self._scrolled.set_vexpand(True)
@@ -180,37 +166,31 @@ class PerformanceView(Gtk.Box):
         if vadj:
             vadj.set_value(vadj.get_lower())
 
-    def set_process(self, process: ServerProcess):
-        self._process = process
-        self._psutil_process = None
+    def set_stats(self, stats: ServerStats | None):
+        self._stats = stats
+        if not stats:
+            return
+        process = stats.process
 
-        if process:
-            if self._tps_handler_id:
-                try:
-                    self._process.disconnect(self._tps_handler_id)
-                except Exception:
-                    pass
-            self._tps_handler_id = process.connect("output-received", self._on_output_for_tps)
+        # Bedrock Dedicated Server never logs the tick-lag line the TPS reading is
+        # derived from, so that card would only ever show a made-up 20 t/s.
+        bedrock = process.is_bedrock
+        self._tps_title.set_visible(not bedrock)
+        self._tps_card.set_visible(not bedrock)
 
-            # Bedrock Dedicated Server never logs the tick-lag line the TPS reading is
-            # derived from, so that card would only ever show a made-up 20 t/s.
-            bedrock = process.is_bedrock
-            self._tps_title.set_visible(not bedrock)
-            self._tps_card.set_visible(not bedrock)
+        # Its memory ceiling is imposed by the OS rather than a JVM heap, but it is a
+        # real ceiling either way, so the gauge means the same thing.
+        self._ram_card.set_subtitle(_("Memory Limit Used") if bedrock else _("Allocated RAM Consumed"))
+        self._ram_alloc_row.set_title(_("Memory Limit") if bedrock else _("RAM Allocation"))
 
-            # Its memory ceiling is imposed by the OS rather than a JVM heap, but it is a
-            # real ceiling either way, so the gauge means the same thing.
-            self._ram_card.set_subtitle(_("Memory Limit Used") if bedrock else _("Allocated RAM Consumed"))
-            self._ram_alloc_row.set_title(_("Memory Limit") if bedrock else _("RAM Allocation"))
+        max_ram_mb = process.ram_mb
+        self._ram_card.set_max_value(max_ram_mb)
 
-            max_ram_mb = process.ram_mb
-            self._ram_card.set_max_value(max_ram_mb)
-
-            max_ram_gb = max_ram_mb / 1024.0
-            if max_ram_gb >= 1.0:
-                self._ram_alloc_row.set_subtitle(f"{max_ram_gb:.1f} GB")
-            else:
-                self._ram_alloc_row.set_subtitle(f"{max_ram_mb} MB")
+        max_ram_gb = max_ram_mb / 1024.0
+        if max_ram_gb >= 1.0:
+            self._ram_alloc_row.set_subtitle(f"{max_ram_gb:.1f} GB")
+        else:
+            self._ram_alloc_row.set_subtitle(f"{max_ram_mb} MB")
 
     def start_monitoring(self):
         self.stop_monitoring()
@@ -229,63 +209,25 @@ class PerformanceView(Gtk.Box):
 
         self._pid_row.set_subtitle("-")
         self._uptime_row.set_subtitle("-")
-        self._psutil_process = None
 
     def _update_stats(self) -> bool:
-        if not self._process or not self._process.is_running:
+        if not self._stats or not self._stats.process.is_running:
             self.reset()
             return True
 
-        pid = self._process.pid
-        if pid:
-            self._pid_row.set_subtitle(str(pid))
-
-        if HAS_PSUTIL and pid:
-            try:
-                if self._psutil_process is None or self._psutil_process.pid != pid:
-                    self._psutil_process = psutil.Process(pid)
-
-                raw_cpu = self._psutil_process.cpu_percent(interval=None)
-                cpu = raw_cpu / float(self._cpu_count)
-                cpu = max(0.0, min(100.0, cpu))
-                self._cpu_card.add_value(cpu, f"{cpu:.1f}")
-
-                mem_info = self._psutil_process.memory_info()
-                rss_mb = mem_info.rss / (1024 * 1024)
-                rss_gb = rss_mb / 1024.0
-
-                self._ram_card.add_value(rss_mb, f"{rss_gb:.2f}")
-
-                create_time = self._psutil_process.create_time()
-                uptime_secs = time.time() - create_time
-                hours = int(uptime_secs // 3600)
-                mins = int((uptime_secs % 3600) // 60)
-                secs = int(uptime_secs % 60)
-                self._uptime_row.set_subtitle(_("{}h {}m {}s").format(hours, mins, secs))
-
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                self._psutil_process = None
-
-        if self._tps_card.get_visible():
-            self._tps_card.add_value(self._tps_value, f"{self._tps_value:.1f}")
+        sample = self._stats.sample()
+        if sample.pid:
+            self._pid_row.set_subtitle(str(sample.pid))
+        if sample.cpu_percent is not None:
+            self._cpu_card.add_value(sample.cpu_percent, f"{sample.cpu_percent:.1f}")
+        if sample.rss_mb is not None:
+            self._ram_card.add_value(sample.rss_mb, f"{sample.rss_mb / 1024.0:.2f}")
+        if sample.uptime_s is not None:
+            hours = int(sample.uptime_s // 3600)
+            mins = int((sample.uptime_s % 3600) // 60)
+            secs = int(sample.uptime_s % 60)
+            self._uptime_row.set_subtitle(_("{}h {}m {}s").format(hours, mins, secs))
+        if sample.tps is not None and self._tps_card.get_visible():
+            self._tps_card.add_value(sample.tps, f"{sample.tps:.1f}")
 
         return True
-
-    def _on_output_for_tps(self, process, text):
-        match = re.search(r"Running (\d+)ms behind", text)
-        if match:
-            behind_ms = int(match.group(1))
-            tick_time = 50 + behind_ms / 20
-            self._tps_value = min(20.0, 1000.0 / max(1, tick_time))
-            return
-
-        match = re.search(r"TPS.*?(\d+\.?\d*)", text)
-        if match:
-            try:
-                self._tps_value = min(20.0, float(match.group(1)))
-            except ValueError:
-                pass
-            return
-
-        if "Done" in text and "For help" in text:
-            self._tps_value = 20.0

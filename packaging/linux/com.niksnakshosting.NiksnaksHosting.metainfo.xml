@@ -47,6 +47,15 @@
   <url type="homepage">https://github.com/Niksnaks3/Niksnaks-hosting</url>
   <url type="bugtracker">https://github.com/Niksnaks3/Niksnaks-hosting/issues</url>
   <releases>
+    <release version="1.5.0" date="2026-09-13">
+      <description>
+        <p>A web panel, for handing servers to other people:</p>
+        <ul>
+          <li>Open Web panel from the main menu and the app hosts a browser control panel on your network. Add users and tick which servers each may control; they get a dashboard, the live console, performance graphs and Modrinth mod install and removal for those servers, and nothing else</li>
+          <li>The Start button's checks, the performance figures and the mod bookkeeping now live in one place shared by the app and the panel, so both agree on what is installed</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.4.0" date="2026-09-13">
       <description>
         <p>Reset the app, tidier hosts, and servers both computers can see:</p>

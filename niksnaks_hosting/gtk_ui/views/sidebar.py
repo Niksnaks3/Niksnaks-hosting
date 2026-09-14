@@ -210,6 +210,7 @@ class Sidebar(Gtk.Box):
         menu_btn.set_focusable(True)
         menu = Gio.Menu()
         menu.append(_("Hosts…"), "app.hosts")
+        menu.append(_("Web panel…"), "app.web-panel")
         menu.append(_("Preferences"), "app.preferences")
         menu.append(_("Keyboard Shortcuts"), "app.shortcuts")
         menu.append(_("About Niksnaks-Hosting"), "app.about")
