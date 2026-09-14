@@ -143,19 +143,14 @@ input:disabled { opacity: .65; }
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
   padding: 2rem; width: min(380px, 100%);
 }
-.login-brand { display: flex; align-items: center; gap: .9rem; margin-bottom: 1.5rem; }
-.login-brand .brand-mark { width: 46px; height: 46px; }
-.login-brand .brand-mark svg { width: 26px; height: 26px; }
+.login-brand { display: flex; flex-direction: column; align-items: center; gap: .2rem; margin-bottom: 1.5rem; }
+.login-logo { width: 140px; height: 140px; display: block; margin: 0 auto .25rem; }
 
 /* ---------------------------------------------------------------- brand */
 
 .brand { display: inline-flex; align-items: center; gap: .65rem; color: var(--text); min-width: 0; }
 .brand:hover { text-decoration: none; }
-.brand-mark {
-  display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; flex: none;
-  border-radius: 9px; background: var(--accent); color: #fff; box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
-}
-.brand-mark svg { width: 18px; height: 18px; stroke: none; }
+.brand-mark { width: 36px; height: 36px; flex: none; display: block; }
 .brand-name { font-family: var(--mono); font-weight: 700; font-size: 15px; letter-spacing: -.02em; white-space: nowrap; }
 
 /* ---------------------------------------------------------------- shell */
