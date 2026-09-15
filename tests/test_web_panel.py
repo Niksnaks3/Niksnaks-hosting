@@ -6,6 +6,7 @@ Run with:  python -m unittest
 from __future__ import annotations
 
 import http.cookiejar
+import io
 import json
 import os
 import tempfile
@@ -13,6 +14,8 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+
+from PIL import Image
 
 # Every module below reads DATA_DIR at import, so the folder has to be chosen first.
 _TMP = tempfile.TemporaryDirectory()
@@ -95,6 +98,16 @@ class RouteTests(unittest.TestCase):
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read() or b"{}")
 
+    def post_bytes(self, path, payload, content_type="image/png"):
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=payload, method="POST")
+        req.add_header("X-Requested-With", "fetch")
+        req.add_header("Content-Type", content_type)
+        try:
+            with self.opener.open(req, timeout=5) as r:
+                return r.status, json.loads(r.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read() or b"{}")
+
     def login(self, user="alice", password="hunter22"):
         status, _ = self.call("POST", "/api/login", {"username": user, "password": password})
         self.assertEqual(status, 200)
@@ -161,6 +174,47 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(self.call("DELETE", f"/api/servers/{self.mine.id}/mods/EXAMPLE.jar")[0], 200)
         self.assertFalse((mods_dir / "example.jar").exists())
         self.assertEqual(self.call("POST", f"/api/servers/{self.mine.id}/mods/install", {})[0], 400)
+
+    def test_settings_and_motd(self):
+        self.login()
+        for path in ("/settings", "/icon", "/update/versions"):
+            self.assertEqual(self.call("GET", f"/api/servers/{self.bedrock.id}{path}")[0], 409)
+        (self.mine.server_dir / "server.properties").write_text("motd=old\nmax-players=20\n", encoding="utf-8")
+        settings = self.call("GET", f"/api/servers/{self.mine.id}/settings")[1]
+        self.assertEqual(settings["motd"], "old")
+        self.assertTrue(settings["properties_readable"])
+        self.assertTrue(settings["can_update"])
+        motd_path = f"/api/servers/{self.mine.id}/settings/motd"
+        self.assertEqual(self.call("POST", motd_path, {"motd": "two\nlines"})[0], 400)
+        self.assertEqual(self.call("POST", motd_path, {"motd": "x" * 201})[0], 400)
+        self.assertEqual(self.call("POST", motd_path, {"motd": "hello there"})[0], 200)
+        written = (self.mine.server_dir / "server.properties").read_text(encoding="utf-8")
+        self.assertIn("motd=hello there", written)
+        self.assertIn("max-players=20", written)   # the rest of the file is left alone
+        self.assertEqual(self.call("GET", f"/api/servers/{self.theirs.id}/settings")[0], 404)
+
+    def test_server_picture_round_trip(self):
+        self.login()
+        self.assertEqual(self.call("GET", f"/api/servers/{self.mine.id}/icon")[0], 404)
+        self.assertEqual(self.post_bytes(f"/api/servers/{self.mine.id}/icon", b"")[0], 400)
+        self.assertEqual(self.post_bytes(f"/api/servers/{self.mine.id}/icon", b"not an image")[0], 400)
+        buffer = io.BytesIO()
+        Image.new("RGB", (40, 90), (10, 120, 200)).save(buffer, "PNG")
+        self.assertEqual(self.post_bytes(f"/api/servers/{self.mine.id}/icon", buffer.getvalue())[0], 200)
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/servers/{self.mine.id}/icon")
+        with self.opener.open(req, timeout=5) as r:
+            self.assertEqual(r.headers["Content-Type"], "image/png")
+            served = r.read()
+        self.assertEqual(Image.open(io.BytesIO(served)).size, (128, 128))   # squared off on the way in
+        self.assertTrue(self.call("GET", f"/api/servers/{self.mine.id}/settings")[1]["has_icon"])
+        self.assertEqual(self.post_bytes(f"/api/servers/{self.theirs.id}/icon", buffer.getvalue())[0], 404)
+
+    def test_update_route_checks_its_arguments(self):
+        self.login()
+        self.assertEqual(self.call("POST", f"/api/servers/{self.mine.id}/update", {})[0], 400)
+        self.assertEqual(self.call("POST", f"/api/servers/{self.bedrock.id}/update", {"mc_version": "1.21.4"})[0], 409)
+        self.assertEqual(self.call("GET", f"/api/servers/{self.mine.id}/update/loader-versions")[0], 400)
+        self.assertEqual(self.call("POST", f"/api/servers/{self.theirs.id}/update", {"mc_version": "1.21.4"})[0], 404)
 
     def test_event_stream_relays_console_output(self):
         self.login()

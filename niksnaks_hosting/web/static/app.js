@@ -79,6 +79,9 @@ const state = {
   commandIndex: 0,
   hasPsutil: true,     // false once /api/stats reports no host figures
   filter: "",
+  settings: null,      // the server's settings once the tab has loaded them
+  iconFile: null,      // the picture chosen but not saved yet
+  updating: false,     // true while a version update is running
 };
 
 const STATUS_LABEL = { running: "Online", stopped: "Offline", starting: "Starting", stopping: "Stopping" };
@@ -188,7 +191,7 @@ async function refreshServers() {
 // Hash routing: #/ is the dashboard, #/server/<id>[/<tab>] one server.
 function route() {
   const hash = location.hash || "#/";
-  const m = hash.match(/^#\/server\/([A-Za-z0-9_-]+)(?:\/(console|performance|mods))?$/);
+  const m = hash.match(/^#\/server\/([A-Za-z0-9_-]+)(?:\/(console|performance|mods|settings))?$/);
   closeMobileSidebar();
   if (m) showServer(m[1], m[2] || "console");
   else showDashboard();
@@ -475,6 +478,7 @@ function leaveServer() {
   $("search-results").innerHTML = "";
   $("search-pager").hidden = true;
   $("mod-list").innerHTML = "";
+  resetSettings();
   if ($("versions-dialog").open) $("versions-dialog").close();
 }
 
@@ -488,8 +492,11 @@ function showServer(id, tab) {
   }
   setPage("server");
   renderHeader();
+  // Everything on both tabs -- mods, the picture, the MOTD, the updater -- is written
+  // by code that only knows Java Edition, so a Bedrock server gets neither.
   $("tab-btn-mods").hidden = !state.current.has_mods;
-  if (!state.current.has_mods && tab === "mods") tab = "console";
+  $("tab-btn-settings").hidden = !state.current.has_mods;
+  if (!state.current.has_mods && (tab === "mods" || tab === "settings")) tab = "console";
   switchTab(tab);
   if (!changed) return;
 
@@ -609,6 +616,7 @@ function switchTab(name) {
   for (const sec of document.querySelectorAll(".tab")) sec.hidden = sec.id !== `tab-${name}`;
   if (name === "performance") drawCharts();
   else if (name === "mods") loadMods();
+  else if (name === "settings") loadSettings();
   else if (name === "console") scrollConsole();
 }
 
@@ -985,6 +993,221 @@ async function install(serverId, hit, version, list) {
 }
 
 $("versions-close").addEventListener("click", () => $("versions-dialog").close());
+
+
+// ---------------------------------------------------------------- settings (Java only)
+
+function resetSettings() {
+  state.settings = null;
+  state.iconFile = null;
+  state.updating = false;
+  $("icon-file").value = "";
+  $("icon-save").disabled = true;
+  $("motd").value = "";
+  $("update-mc").innerHTML = "";
+  $("update-loader").innerHTML = "";
+  $("update-mc").disabled = true;
+  $("update-loader").disabled = true;
+  $("update-run").disabled = true;
+  $("update-progress").hidden = true;
+  $("update-note").hidden = true;
+  $("update-current").textContent = "";
+}
+
+async function loadSettings() {
+  const s = state.current;
+  if (!s || !s.has_mods || state.settings) return;
+  const id = s.id, visit = state.visit;
+  let data;
+  try { data = await api("GET", `/api/servers/${id}/settings`); } catch (err) { toast(err.message); return; }
+  if (state.visit !== visit) return;
+  state.settings = data;
+
+  paintIconPreview(data.has_icon ? `/api/servers/${id}/icon?t=${Date.now()}` : null);
+  $("motd").value = data.motd;
+  $("motd").disabled = !data.properties_readable;
+  $("motd-save").disabled = !data.properties_readable;
+  $("motd").placeholder = data.properties_readable
+    ? "a Niksnaks-Hosting server"
+    : "This server's server.properties could not be read.";
+
+  $("update-current").textContent = `Now on ${data.mc_version}`;
+  $("update-loader-label").textContent = `${loaderLabel(s).split(" ")[0] || "Loader"} version`;
+  if (!data.can_update) {
+    updateNote("A server on another machine has to be updated from the app on that machine.");
+    return;
+  }
+  loadUpdateVersions(id, visit);
+}
+
+function updateNote(text) {
+  $("update-note-text").textContent = text;
+  $("update-note").hidden = !text;
+}
+
+function paintIconPreview(src) {
+  const box = $("icon-preview");
+  const img = box.querySelector("img");
+  box.querySelector(".monogram").textContent = monogram(state.current ? state.current.name : "?");
+  if (src) {
+    img.src = src;
+    img.hidden = false;
+    img.onerror = () => { img.hidden = true; };
+  } else {
+    img.removeAttribute("src");
+    img.hidden = true;
+  }
+}
+
+async function loadUpdateVersions(id, visit) {
+  const mc = $("update-mc");
+  mc.innerHTML = `<option>Looking for newer versions…</option>`;
+  let data;
+  try { data = await api("GET", `/api/servers/${id}/update/versions`); } catch (err) { mc.innerHTML = ""; updateNote(err.message); return; }
+  if (state.visit !== visit || !state.current || state.current.id !== id) return;
+  mc.innerHTML = "";
+  if (!data.mc_versions.length) {
+    mc.innerHTML = `<option>No newer Minecraft versions</option>`;
+    updateNote("This server is already on the newest Minecraft version its loader offers.");
+    return;
+  }
+  updateNote("Updating makes a full backup first, then reinstalls the server. Mods that do not fit the new version are moved aside.");
+  for (const v of data.mc_versions) {
+    const opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = v;
+    mc.appendChild(opt);
+  }
+  mc.disabled = false;
+  loadLoaderVersions(id, visit);
+}
+
+async function loadLoaderVersions(id, visit) {
+  const sel = $("update-loader");
+  const mcVersion = $("update-mc").value;
+  sel.disabled = true;
+  $("update-run").disabled = true;
+  sel.innerHTML = `<option>Loading…</option>`;
+  let options;
+  try {
+    options = await api("GET", `/api/servers/${id}/update/loader-versions?mc_version=${encodeURIComponent(mcVersion)}`);
+  } catch (err) { sel.innerHTML = ""; updateNote(err.message); return; }
+  if (state.visit !== visit || !state.current || state.current.id !== id || $("update-mc").value !== mcVersion) return;
+  sel.innerHTML = "";
+  if (!options.length) {
+    sel.innerHTML = `<option>No builds for this version</option>`;
+    return;
+  }
+  for (const o of options) {
+    const opt = document.createElement("option");
+    opt.value = o.version;
+    opt.textContent = o.label;
+    sel.appendChild(opt);
+  }
+  sel.disabled = false;
+  $("update-run").disabled = state.updating;
+}
+
+$("update-mc").addEventListener("change", () => {
+  if (state.current) loadLoaderVersions(state.current.id, state.visit);
+});
+
+$("icon-file").addEventListener("change", (e) => {
+  const file = e.target.files && e.target.files[0];
+  state.iconFile = file || null;
+  $("icon-save").disabled = !file;
+  paintIconPreview(file ? URL.createObjectURL(file) : (state.settings && state.settings.has_icon ? `/api/servers/${state.current.id}/icon?t=${Date.now()}` : null));
+});
+
+$("icon-save").addEventListener("click", async () => {
+  const file = state.iconFile;
+  if (!file || !state.current) return;
+  const id = state.current.id;
+  $("icon-save").disabled = true;
+  try {
+    const res = await fetch(`/api/servers/${id}/icon`, {
+      method: "POST",
+      headers: { "X-Requested-With": "fetch", "Content-Type": file.type || "application/octet-stream" },
+      body: file,
+    });
+    let data = {};
+    try { data = await res.json(); } catch (_) { /* no body */ }
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    toast("Server picture saved");
+    state.iconFile = null;
+    $("icon-file").value = "";
+    if (state.settings) state.settings.has_icon = true;
+    if (state.current && state.current.id === id) paintIconPreview(`/api/servers/${id}/icon?t=${Date.now()}`);
+  } catch (err) {
+    toast(err.message);
+    $("icon-save").disabled = false;
+  }
+});
+
+$("motd-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!state.current) return;
+  const id = state.current.id;
+  $("motd-save").disabled = true;
+  try {
+    await api("POST", `/api/servers/${id}/settings/motd`, { motd: $("motd").value });
+    if (state.settings) state.settings.motd = $("motd").value;
+    toast(state.current.status === "running"
+      ? "Message of the day saved — restart the server to show it"
+      : "Message of the day saved");
+  } catch (err) { toast(err.message); }
+  $("motd-save").disabled = false;
+});
+
+$("update-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const s = state.current;
+  if (!s || state.updating) return;
+  const mcVersion = $("update-mc").value, loaderVersion = $("update-loader").value;
+  if (!mcVersion || $("update-mc").disabled) return;
+  if (s.status !== "stopped") { toast("Stop the server before updating it"); return; }
+  const ok = await confirmDialog(
+    "Update server",
+    `Update ${s.name} from Minecraft ${s.mc_version} to ${mcVersion}? A full backup is made first, and mods that do not fit the new version are moved aside.`,
+    "Update");
+  if (!ok) return;
+  runUpdate(s.id, mcVersion, loaderVersion);
+});
+
+async function runUpdate(id, mcVersion, loaderVersion) {
+  state.updating = true;
+  $("update-run").disabled = true;
+  $("update-mc").disabled = true;
+  $("update-loader").disabled = true;
+  $("update-progress").hidden = false;
+  $("update-bar").value = 0;
+  $("update-detail").textContent = "Starting…";
+  const finish = (message, failed) => {
+    state.updating = false;
+    toast(message);
+    // The version, the loader and the mod list all just moved; reload the lot.
+    refreshServers().catch(() => {});
+    if (state.current && state.current.id === id) {
+      $("update-progress").hidden = !failed;
+      state.settings = null;
+      loadSettings();
+      if (state.tab === "mods") loadMods();
+    }
+  };
+  let job;
+  try {
+    job = await api("POST", `/api/servers/${id}/update`, { mc_version: mcVersion, loader_version: loaderVersion });
+  } catch (err) { finish(err.message, true); return; }
+  const poll = async () => {
+    let j;
+    try { j = await api("GET", `/api/jobs/${job.job_id}`); } catch (err) { finish(err.message, true); return; }
+    $("update-bar").value = j.fraction;
+    $("update-detail").textContent = j.message;
+    if (j.state === "running") { setTimeout(poll, 700); return; }
+    finish(j.state === "done" ? j.message : `Update failed: ${j.message}`, j.state !== "done");
+  };
+  poll();
+}
 
 // ---------------------------------------------------------------- boot
 

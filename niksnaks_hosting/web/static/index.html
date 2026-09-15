@@ -41,6 +41,9 @@
     <symbol id="i-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
     <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
     <symbol id="i-close" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></symbol>
+    <symbol id="i-upgrade" viewBox="0 0 24 24"><path d="M12 20V7M6 13l6-6 6 6M5 3h14"/></symbol>
   </defs>
 </svg>
 
@@ -186,6 +189,7 @@
           <button type="button" role="tab" data-tab="console" id="tab-btn-console" aria-controls="tab-console" aria-selected="true" class="active"><svg><use href="#i-terminal"/></svg><span>Terminal</span></button>
           <button type="button" role="tab" data-tab="performance" id="tab-btn-performance" aria-controls="tab-performance" aria-selected="false"><svg><use href="#i-chart"/></svg><span>Metrics</span></button>
           <button type="button" role="tab" data-tab="mods" id="tab-btn-mods" aria-controls="tab-mods" aria-selected="false"><svg><use href="#i-layers"/></svg><span>Mods</span></button>
+          <button type="button" role="tab" data-tab="settings" id="tab-btn-settings" aria-controls="tab-settings" aria-selected="false"><svg><use href="#i-settings"/></svg><span>Settings</span></button>
         </nav>
         <div class="card-body">
           <section id="tab-console" class="tab" role="tabpanel" aria-labelledby="tab-btn-console">
@@ -242,6 +246,51 @@
                   <span id="page-info" class="muted"></span>
                   <button id="next-page" class="btn small" type="button"><span>Next</span><svg><use href="#i-right"/></svg></button>
                 </div>
+              </div>
+            </div>
+          </section>
+
+          <section id="tab-settings" class="tab" role="tabpanel" aria-labelledby="tab-btn-settings" hidden>
+            <div class="split">
+              <div class="panel">
+                <div class="panel-header"><h3><svg><use href="#i-image"/></svg>Server picture</h3></div>
+                <p class="note muted"><svg><use href="#i-warning"/></svg><span>Shown in this app and, as server-icon.png, in Minecraft's server list. Square images work best.</span></p>
+                <div class="icon-edit">
+                  <span id="icon-preview" class="icon-preview"><span class="monogram"></span><img alt="" hidden></span>
+                  <div class="grow">
+                    <input id="icon-file" type="file" accept="image/*" aria-label="Choose a picture">
+                    <div class="row-actions">
+                      <button id="icon-save" class="btn primary small" type="button" disabled><svg><use href="#i-image"/></svg><span>Save picture</span></button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-header"><h3><svg><use href="#i-server"/></svg>Message of the day</h3></div>
+                <p class="note muted"><svg><use href="#i-warning"/></svg><span>The line players see under the server's name. It is read when the server starts, so restart it to show a new one.</span></p>
+                <form id="motd-form" class="settings-form">
+                  <label class="field"><span>Message of the day</span><input id="motd" maxlength="200" autocomplete="off" placeholder="a Niksnaks-Hosting server"></label>
+                  <div class="row-actions">
+                    <button id="motd-save" type="submit" class="btn primary small"><span>Save message</span></button>
+                  </div>
+                </form>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-header"><h3><svg><use href="#i-upgrade"/></svg>Update the server</h3><span id="update-current" class="tag"></span></div>
+              <p id="update-note" class="note muted" hidden><svg><use href="#i-warning"/></svg><span id="update-note-text"></span></p>
+              <form id="update-form" class="settings-form">
+                <label class="field"><span>Minecraft version</span><select id="update-mc" disabled></select></label>
+                <label class="field"><span id="update-loader-label">Loader version</span><select id="update-loader" disabled></select></label>
+                <div class="row-actions">
+                  <button id="update-run" type="submit" class="btn primary small" disabled><svg><use href="#i-upgrade"/></svg><span>Update server</span></button>
+                </div>
+              </form>
+              <div id="update-progress" hidden>
+                <progress id="update-bar" max="1" value="0" aria-label="Update progress"></progress>
+                <span id="update-detail" class="muted" aria-live="polite"></span>
               </div>
             </div>
           </section>

@@ -10,7 +10,7 @@ A desktop app that creates, runs and looks after Minecraft servers — Java or B
 this computer or on another one — and can hand them out to friends through a web panel.
 
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.5.0-brightgreen.svg)](https://github.com/Niksnaks3/Niksnaks-hosting/releases)
+[![Version](https://img.shields.io/badge/version-1.5.1-brightgreen.svg)](https://github.com/Niksnaks3/Niksnaks-hosting/releases)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey.svg)](#-installation)
 [![Python](https://img.shields.io/badge/python-3.13%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![GTK4](https://img.shields.io/badge/GTK-4%20%2F%20libadwaita-4A86CF.svg?logo=gnome&logoColor=white)](https://gtk.org/)
@@ -217,6 +217,15 @@ drawn in the app's own colours:
   - **Metrics** — tiles plus two minutes of CPU, memory, TPS and player graphs.
   - **Mods** — the installed list, removal with dependency clean-up, and Modrinth search
     and install, filtered to the server's Minecraft version and loader.
+  - **Settings** — for a Java server: its picture (the one Minecraft shows in the server
+    list), its message of the day, and the version updater — pick a newer Minecraft
+    version and loader build, and the app makes a full backup, reinstalls the server and
+    moves mods that no longer fit aside, exactly as the app's own updater does.
+
+The Mods and Settings tabs are hidden for a Bedrock server, whose files this app only
+manages from the desktop window. A server on another machine can have its picture and
+message of the day changed from the panel, but not its version: that install would run on
+the wrong computer, so the panel says so instead.
 
 Starting a server from the panel goes through the same checks as the app's Start button.
 For a server on another machine, CPU, memory and uptime are not available; the rest is.
@@ -228,7 +237,7 @@ the background — and stops when you quit.
 > The panel speaks plain HTTP and is meant for your own network. Before exposing it to the
 > internet, put a reverse proxy with HTTPS in front (Caddy or nginx are a few lines each)
 > and forward only that. Anyone you give a server to can run any console command on it, so
-> treat a login like a key. Logins are stored hashed in `web_users.json` in the data
+> treat a login like a key, and update or reinstall its server. Logins are stored hashed in `web_users.json` in the data
 > folder. Windows may ask to allow the app through the firewall the first time it starts.
 
 ## 🛠 Development

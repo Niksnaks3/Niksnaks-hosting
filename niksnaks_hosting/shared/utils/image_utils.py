@@ -11,7 +11,11 @@ try:
     gi.require_version("Gdk", "4.0")
     gi.require_version("GdkPixbuf", "2.0")
     from gi.repository import Gdk, GdkPixbuf, GLib, Gtk
-except ImportError:
+except Exception:
+    # Not only ImportError: require_version raises ValueError when the typelib is not
+    # installed, and a half-installed PyGObject leaves an importable `gi` with nothing
+    # in it. The picture functions below are plain PIL and are wanted either way --
+    # the web panel writes server pictures through them too.
     gi = None
     GdkPixbuf = None
     Gdk = None

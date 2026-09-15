@@ -94,7 +94,8 @@ def _users_group(dialog, panel: WebPanel, manager: ServerManager) -> Adw.Prefere
         description=_(
             "Each user logs in with their own name and password and sees only the servers "
             "ticked for them. Anyone with a server can start and stop it, type into its "
-            "console and change its mods -- give it to people you would hand the keys to."
+            "console, change its mods, its picture and its message of the day, and update "
+            "it to a newer Minecraft version -- give it to people you would hand the keys to."
         ),
     )
     rows: list[Gtk.Widget] = []

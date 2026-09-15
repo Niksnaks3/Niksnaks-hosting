@@ -47,6 +47,16 @@
   <url type="homepage">https://github.com/Niksnaks3/Niksnaks-hosting</url>
   <url type="bugtracker">https://github.com/Niksnaks3/Niksnaks-hosting/issues</url>
   <releases>
+    <release version="1.5.1" date="2026-09-15">
+      <description>
+        <p>The web panel can now look after a Java server, not just run it:</p>
+        <ul>
+          <li>A Settings tab on the server page: give the server its picture, the one the app shows and the one Minecraft puts in the multiplayer list, and write its message of the day straight into server.properties</li>
+          <li>Update a server to a newer Minecraft version from the browser. It makes a full backup first, reinstalls the loader, updates the mods that fit and moves aside the ones that do not, exactly as the app's own updater does</li>
+          <li>The tab is hidden for a Bedrock server, and a server on another computer can have its picture and message of the day changed but not its version, which has to be installed from the app on that machine</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.5.0" date="2026-09-13">
       <description>
         <p>A web panel, for handing servers to other people:</p>

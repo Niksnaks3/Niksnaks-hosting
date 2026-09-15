@@ -133,6 +133,17 @@ input {
 input::placeholder { color: var(--muted); }
 input:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
 input:disabled { opacity: .65; }
+select {
+  font: inherit; color: var(--text); background: var(--bg);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); padding: .5rem .75rem; width: 100%; min-width: 0;
+}
+select:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
+select:disabled { opacity: .65; }
+input[type="file"] { padding: .4rem; cursor: pointer; }
+input[type="file"]::file-selector-button {
+  font: inherit; margin-right: .6rem; padding: .35rem .7rem; cursor: pointer;
+  color: var(--text); background: var(--surface-3); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
 .field { display: block; margin-bottom: .9rem; }
 .field span { display: block; font-size: .85rem; color: var(--muted); margin-bottom: .3rem; }
 
@@ -378,7 +389,22 @@ td.col-actions .busy svg { animation: spin 1.2s linear infinite; }
 .modal p { white-space: pre-line; }
 .modal .form-error { margin: .75rem 0 0; }
 progress { width: 100%; height: 8px; accent-color: var(--accent); }
-#install-progress { margin-top: .9rem; }
+#install-progress, #update-progress { margin-top: .9rem; }
+
+/* settings */
+.settings-form { margin: 0; }
+.settings-form .field:last-of-type { margin-bottom: .6rem; }
+.row-actions { display: flex; justify-content: flex-end; gap: .5rem; }
+.icon-edit { display: flex; align-items: center; gap: 1rem; }
+.icon-edit .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .6rem; }
+.icon-preview {
+  position: relative; width: 72px; height: 72px; flex: none; border-radius: var(--radius-sm);
+  background: var(--surface-3); border: 1px solid var(--border);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.icon-preview .monogram { color: var(--muted); font-weight: 700; font-size: 1.2rem; }
+/* The picture sits on top of the monogram, so a server without one still shows its initials. */
+.icon-preview img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
 
 /* The toast stays in the document (so screen readers hear it) and only fades. */
 #toast {

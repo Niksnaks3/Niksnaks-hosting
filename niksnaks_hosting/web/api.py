@@ -7,10 +7,13 @@ not exist, so the ids of other people's servers cannot be probed.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import mimetypes
+import os
 import re
+import tempfile
 import threading
 import time
 import uuid
@@ -22,8 +25,15 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from niksnaks_hosting.shared.backend import mod_installer, modrinth_client
+from niksnaks_hosting.shared.backend.config_manager import ConfigManager
+from niksnaks_hosting.shared.backend.server_manager import ServerManager
 from niksnaks_hosting.shared.backend.stats import host_sample
-from niksnaks_hosting.shared.utils.constants import ServerStatus, is_bedrock, normalize_loader
+from niksnaks_hosting.shared.utils.constants import (
+    ServerStatus,
+    is_bedrock,
+    normalize_loader,
+    uses_installer,
+)
 
 if TYPE_CHECKING:
     from niksnaks_hosting.web.panel import WebPanel
@@ -33,7 +43,14 @@ log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
 SESSION_COOKIE = "nh_session"
 MAX_BODY = 64 * 1024
+MAX_ICON_BYTES = 4 * 1024 * 1024  # a server picture is 128x128; anything this big is a mistake
 JOB_TTL_S = 600
+
+# A Bedrock server keeps its settings somewhere else and is installed by another part of
+# the app entirely, so the panel says which window to use rather than half-doing it.
+JAVA_ONLY_SETTINGS = "These settings are only kept for Java Edition servers"
+JAVA_ONLY_PICTURE = "A picture is only kept for Java Edition servers"
+JAVA_ONLY_UPDATE = "A Bedrock server is updated from the app's own window"
 
 
 class HttpError(Exception):
@@ -44,7 +61,7 @@ class HttpError(Exception):
 
 
 class Job:
-    """One background mod install, polled by the browser until it is done."""
+    """One background mod install or version update, polled by the browser until it is done."""
 
     def __init__(self) -> None:
         self.id = uuid.uuid4().hex
@@ -318,19 +335,24 @@ class PanelHandler(BaseHTTPRequestHandler):
                 servers[info.id] = stats.sample().to_dict()
         self._json({"host": host_sample(), "servers": servers})
 
-    def _mods_root(self, user, server_id: str):
+    def _java_server(self, user, server_id: str, refusal: str = "Bedrock servers have no mods"):
+        """A server the user may touch, refused when it is a Bedrock one.
+
+        Mods, the server picture, the MOTD and the version updater are all written by
+        code that only knows Java Edition's layout, so they share this door.
+        """
         info = self._server_for(user, server_id)
         if is_bedrock(info.edition):
-            raise HttpError(409, "Bedrock servers have no mods")
+            raise HttpError(409, refusal)
         return info
 
     def r_mods(self, server_id: str) -> None:
-        info = self._mods_root(self._require_user(), server_id)
+        info = self._java_server(self._require_user(), server_id)
         self._json([m.to_dict() for m in mod_installer.list_installed(info.server_dir)])
 
     def r_mod_delete(self, server_id: str, filename: str) -> None:
         self._require_mutation()
-        info = self._mods_root(self._require_user(), server_id)
+        info = self._java_server(self._require_user(), server_id)
         process = self.panel.manager.get_existing_process(info.id)
         if process and process.is_running:
             raise HttpError(409, "Stop the server before removing mods")
@@ -342,7 +364,7 @@ class PanelHandler(BaseHTTPRequestHandler):
         self._json({"ok": True, "removed": message})
 
     def r_search(self, server_id: str) -> None:
-        info = self._mods_root(self._require_user(), server_id)
+        info = self._java_server(self._require_user(), server_id)
         q = self._query()
         try:
             offset = max(0, int(q.get("offset", "0")))
@@ -375,7 +397,7 @@ class PanelHandler(BaseHTTPRequestHandler):
         )
 
     def r_versions(self, server_id: str, project_id: str) -> None:
-        info = self._mods_root(self._require_user(), server_id)
+        info = self._java_server(self._require_user(), server_id)
         versions = modrinth_client.find_compatible_versions(
             project_id, info.mc_version, normalize_loader(info.loader_type), limit=12
         )
@@ -394,7 +416,7 @@ class PanelHandler(BaseHTTPRequestHandler):
 
     def r_install(self, server_id: str) -> None:
         self._require_mutation()
-        info = self._mods_root(self._require_user(), server_id)
+        info = self._java_server(self._require_user(), server_id)
         body = self._body()
         project_id = str(body.get("project_id", "")).strip()
         version_id = str(body.get("version_id", "")).strip()
@@ -434,6 +456,146 @@ class PanelHandler(BaseHTTPRequestHandler):
         threading.Thread(target=worker, daemon=True, name=f"web-install-{job.id[:8]}").start()
         self._json({"job_id": job.id}, 202)
 
+    # -- settings: the picture, the MOTD and the version updater (Java Edition only) -------
+
+    def r_settings(self, server_id: str) -> None:
+        info = self._java_server(self._require_user(), server_id, JAVA_ONLY_SETTINGS)
+        config = ConfigManager(info.server_dir)
+        readable = config.try_load()
+        self._json(
+            {
+                "motd": config.get("motd", "") if readable else "",
+                "properties_readable": readable,
+                "has_icon": bool(self.panel.manager.icon_bytes(info)),
+                "mc_version": info.mc_version,
+                "loader_type": info.loader_type,
+                "loader_version": info.loader_version,
+                # Updating downloads and installs on the machine the app runs on, which
+                # for a server on another computer is the wrong disk; the GTK app refuses
+                # the same way. Saying so here keeps the browser from offering it at all.
+                "can_update": not info.is_remote,
+            }
+        )
+
+    def r_set_motd(self, server_id: str) -> None:
+        self._require_mutation()
+        info = self._java_server(self._require_user(), server_id, JAVA_ONLY_SETTINGS)
+        motd = str(self._body().get("motd", ""))
+        if len(motd) > 200:
+            raise HttpError(400, "That message of the day is too long")
+        if "\n" in motd or "\r" in motd:
+            raise HttpError(400, "A message of the day is a single line")
+        config = ConfigManager(info.server_dir)
+        if not config.try_load():
+            raise HttpError(409, "Could not read this server's server.properties")
+        config.set_value("motd", motd)
+        try:
+            config.save()
+        except Exception as exc:
+            raise HttpError(409, f"Could not save server.properties: {exc}") from None
+        self._json({"ok": True, "motd": motd})
+
+    def r_icon(self, server_id: str) -> None:
+        info = self._java_server(self._require_user(), server_id, JAVA_ONLY_PICTURE)
+        data = self.panel.manager.icon_bytes(info)
+        if not data:
+            raise HttpError(404, "This server has no picture")
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def r_set_icon(self, server_id: str) -> None:
+        self._require_mutation()
+        info = self._java_server(self._require_user(), server_id, JAVA_ONLY_PICTURE)
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > MAX_ICON_BYTES:
+            raise HttpError(413, "That picture is too large")
+        raw = self.rfile.read(length) if length else b""
+        if not raw:
+            raise HttpError(400, "No picture was sent")
+        # set_server_icon reads a file, because that is what the GTK file chooser hands
+        # it; the browser hands over bytes instead, so they go through a temporary file.
+        with tempfile.NamedTemporaryFile(suffix=".img", delete=False) as tmp:
+            tmp.write(raw)
+            tmp_path = tmp.name
+        try:
+            ok, message = self.panel.manager.set_server_icon(info.id, tmp_path)
+        finally:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+        if not ok:
+            raise HttpError(400, message or "That file is not a picture this app can use")
+        self._json({"ok": True})
+
+    def r_update_versions(self, server_id: str) -> None:
+        """The Minecraft versions this server could move up to, newest first."""
+        info = self._java_server(self._require_user(), server_id, JAVA_ONLY_UPDATE)
+        manager = self.panel.manager
+        versions = manager.download_manager.fetch_game_versions_for_loader(info.loader_type)
+        newer = [v for v in versions if ServerManager.is_version_after(v, info.mc_version)]
+        self._json({"current": info.mc_version, "loader_type": info.loader_type, "mc_versions": newer})
+
+    def r_loader_versions(self, server_id: str) -> None:
+        info = self._java_server(self._require_user(), server_id, JAVA_ONLY_UPDATE)
+        mc_version = self._query().get("mc_version", "").strip()
+        if not mc_version:
+            raise HttpError(400, "mc_version is required")
+        manager = self.panel.manager
+        options = manager.download_manager.fetch_compatible_loader_versions(info.loader_type, mc_version)
+        # Forge and NeoForge builds are rebuilt per Minecraft version, so "newer than what
+        # is installed" means nothing for them and every build stays on offer.
+        if not uses_installer(info.loader_type) and info.loader_version:
+            newer = [o for o in options if ServerManager.is_version_at_least(o.version, info.loader_version)]
+            options = newer or options
+        self._json([{"version": o.version, "label": o.label} for o in options])
+
+    def r_update(self, server_id: str) -> None:
+        self._require_mutation()
+        info = self._java_server(self._require_user(), server_id, JAVA_ONLY_UPDATE)
+        body = self._body()
+        mc_version = str(body.get("mc_version", "")).strip()
+        loader_version = str(body.get("loader_version", "")).strip()
+        if not mc_version:
+            raise HttpError(400, "mc_version is required")
+        if info.is_remote:
+            # The install would download and unpack on this computer, into what is the
+            # host's folder; the GTK app refuses for the same reason.
+            raise HttpError(409, f"A server on {info.host.name} has to be updated from the app on that machine")
+        process = self.panel.manager.get_existing_process(info.id)
+        if process and process.is_running:
+            raise HttpError(409, "Stop the server before updating it")
+        job = self.panel.new_job()
+        manager = self.panel.manager
+        manager.begin_mod_operation(info.id)
+
+        def progress(fraction: float, detail: str) -> None:
+            job.fraction, job.message = float(fraction), str(detail)
+
+        def worker() -> None:
+            try:
+                ok, message = manager.update_server_runtime(
+                    info.id,
+                    mc_version,
+                    loader_version or None,
+                    progress_callback=progress,
+                    loader_type=info.loader_type,
+                )
+                job.state = "done" if ok else "failed"
+                job.message = message
+                if ok:
+                    job.fraction = 1.0
+            except Exception as exc:
+                job.state, job.message = "failed", str(exc)
+            finally:
+                job.finished_at = time.time()
+                manager.end_mod_operation(info.id)
+
+        threading.Thread(target=worker, daemon=True, name=f"web-update-{job.id[:8]}").start()
+        self._json({"job_id": job.id}, 202)
+
     def r_job(self, job_id: str) -> None:
         self._require_user()
         job = self.panel.job(job_id)
@@ -464,5 +626,12 @@ ROUTES: list[Route] = [
     _r("GET", rf"/api/servers/{SID}/modrinth/search", PanelHandler.r_search),
     _r("GET", rf"/api/servers/{SID}/modrinth/([A-Za-z0-9]+)/versions", PanelHandler.r_versions),
     _r("POST", rf"/api/servers/{SID}/mods/install", PanelHandler.r_install),
+    _r("GET", rf"/api/servers/{SID}/settings", PanelHandler.r_settings),
+    _r("POST", rf"/api/servers/{SID}/settings/motd", PanelHandler.r_set_motd),
+    _r("GET", rf"/api/servers/{SID}/icon", PanelHandler.r_icon),
+    _r("POST", rf"/api/servers/{SID}/icon", PanelHandler.r_set_icon),
+    _r("GET", rf"/api/servers/{SID}/update/versions", PanelHandler.r_update_versions),
+    _r("GET", rf"/api/servers/{SID}/update/loader-versions", PanelHandler.r_loader_versions),
+    _r("POST", rf"/api/servers/{SID}/update", PanelHandler.r_update),
     _r("GET", r"/api/jobs/([a-f0-9]+)", PanelHandler.r_job),
 ]
