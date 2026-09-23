@@ -6,7 +6,8 @@
 <meta name="color-scheme" content="dark light">
 <title>Niksnaks-Hosting</title>
   <link rel="icon" type="image/png" href="favicon.png">
-<link rel="stylesheet" href="/style.css">
+<meta name="app-version" content="__APP_VERSION__">
+<link rel="stylesheet" href="/style.css?v=__APP_VERSION__">
 </head>
 <body>
 
@@ -267,10 +268,10 @@
               </div>
 
               <div class="panel">
-                <div class="panel-header"><h3><svg><use href="#i-server"/></svg>Message of the day</h3></div>
-                <p class="note muted"><svg><use href="#i-warning"/></svg><span>The line players see under the server's name. It is read when the server starts, so restart it to show a new one.</span></p>
+                <div class="panel-header"><h3><svg><use href="#i-server"/></svg><span id="motd-title">Message of the day</span></h3></div>
+                <p class="note muted"><svg><use href="#i-warning"/></svg><span id="motd-note">The line players see under the server's name. It is read when the server starts, so restart it to show a new one.</span></p>
                 <form id="motd-form" class="settings-form">
-                  <label class="field"><span>Message of the day</span><input id="motd" maxlength="200" autocomplete="off" placeholder="a Niksnaks-Hosting server"></label>
+                  <label class="field"><span id="motd-label">Message of the day</span><input id="motd" maxlength="200" autocomplete="off" placeholder="a Niksnaks-Hosting server"></label>
                   <div class="row-actions">
                     <button id="motd-save" type="submit" class="btn primary small"><span>Save message</span></button>
                   </div>
@@ -282,8 +283,8 @@
               <div class="panel-header"><h3><svg><use href="#i-upgrade"/></svg>Update the server</h3><span id="update-current" class="tag"></span></div>
               <p id="update-note" class="note muted" hidden><svg><use href="#i-warning"/></svg><span id="update-note-text"></span></p>
               <form id="update-form" class="settings-form">
-                <label class="field"><span>Minecraft version</span><select id="update-mc" disabled></select></label>
-                <label class="field"><span id="update-loader-label">Loader version</span><select id="update-loader" disabled></select></label>
+                <label class="field"><span id="update-mc-label">Minecraft version</span><select id="update-mc" disabled></select></label>
+                <label class="field" id="update-loader-field"><span id="update-loader-label">Loader version</span><select id="update-loader" disabled></select></label>
                 <div class="row-actions">
                   <button id="update-run" type="submit" class="btn primary small" disabled><svg><use href="#i-upgrade"/></svg><span>Update server</span></button>
                 </div>
@@ -321,6 +322,6 @@
 
 <div id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
-<script src="/app.js"></script>
+<script src="/app.js?v=__APP_VERSION__"></script>
 </body>
 </html>

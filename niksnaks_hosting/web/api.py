@@ -29,6 +29,7 @@ from niksnaks_hosting.shared.backend.config_manager import ConfigManager
 from niksnaks_hosting.shared.backend.server_manager import ServerManager
 from niksnaks_hosting.shared.backend.stats import host_sample
 from niksnaks_hosting.shared.utils.constants import (
+    APP_VERSION,
     ServerStatus,
     is_bedrock,
     normalize_loader,
@@ -46,11 +47,10 @@ MAX_BODY = 64 * 1024
 MAX_ICON_BYTES = 4 * 1024 * 1024  # a server picture is 128x128; anything this big is a mistake
 JOB_TTL_S = 600
 
-# A Bedrock server keeps its settings somewhere else and is installed by another part of
-# the app entirely, so the panel says which window to use rather than half-doing it.
-JAVA_ONLY_SETTINGS = "These settings are only kept for Java Edition servers"
-JAVA_ONLY_PICTURE = "A picture is only kept for Java Edition servers"
-JAVA_ONLY_UPDATE = "A Bedrock server is updated from the app's own window"
+# The line players see in the server list: Java Edition calls it the MOTD, Bedrock
+# keeps the same thing under server-name, and the GTK app edits whichever one it is.
+MOTD_KEY_JAVA = "motd"
+MOTD_KEY_BEDROCK = "server-name"
 
 
 class HttpError(Exception):
@@ -143,6 +143,10 @@ class PanelHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        # The page compares this with the version it was served as, and reloads itself
+        # once the app underneath it has been updated rather than calling routes that
+        # have changed shape with an old copy of app.js.
+        self.send_header("X-App-Version", APP_VERSION)
         for k, v in (extra_headers or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -154,6 +158,10 @@ class PanelHandler(BaseHTTPRequestHandler):
         if not target.is_relative_to(STATIC_DIR.resolve()) or not target.is_file():
             raise HttpError(404, "Not found")
         data = target.read_bytes()
+        if target.name == "index.html":
+            # A browser or a proxy in front of the panel may hold on to the old script
+            # and stylesheet after an update; a new URL per version cannot be stale.
+            data = data.replace(b"__APP_VERSION__", APP_VERSION.encode())
         ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
         if ctype.startswith("text/") or ctype in ("application/javascript", "application/json"):
             ctype += "; charset=utf-8"
@@ -335,15 +343,11 @@ class PanelHandler(BaseHTTPRequestHandler):
                 servers[info.id] = stats.sample().to_dict()
         self._json({"host": host_sample(), "servers": servers})
 
-    def _java_server(self, user, server_id: str, refusal: str = "Bedrock servers have no mods"):
-        """A server the user may touch, refused when it is a Bedrock one.
-
-        Mods, the server picture, the MOTD and the version updater are all written by
-        code that only knows Java Edition's layout, so they share this door.
-        """
+    def _java_server(self, user, server_id: str):
+        """A server the user may touch, refused when it is a Bedrock one: mods are Java only."""
         info = self._server_for(user, server_id)
         if is_bedrock(info.edition):
-            raise HttpError(409, refusal)
+            raise HttpError(409, "Bedrock servers have no mods")
         return info
 
     def r_mods(self, server_id: str) -> None:
@@ -456,30 +460,39 @@ class PanelHandler(BaseHTTPRequestHandler):
         threading.Thread(target=worker, daemon=True, name=f"web-install-{job.id[:8]}").start()
         self._json({"job_id": job.id}, 202)
 
-    # -- settings: the picture, the MOTD and the version updater (Java Edition only) -------
+    # -- settings: the picture, the MOTD and the version updater ---------------------------
+
+    @staticmethod
+    def _motd_key(info) -> str:
+        return MOTD_KEY_BEDROCK if is_bedrock(info.edition) else MOTD_KEY_JAVA
 
     def r_settings(self, server_id: str) -> None:
-        info = self._java_server(self._require_user(), server_id, JAVA_ONLY_SETTINGS)
+        info = self._server_for(self._require_user(), server_id)
+        bedrock = is_bedrock(info.edition)
         config = ConfigManager(info.server_dir)
         readable = config.try_load()
         self._json(
             {
-                "motd": config.get("motd", "") if readable else "",
+                "edition": info.edition,
+                "motd": config.get(self._motd_key(info), "") if readable else "",
                 "properties_readable": readable,
                 "has_icon": bool(self.panel.manager.icon_bytes(info)),
                 "mc_version": info.mc_version,
                 "loader_type": info.loader_type,
                 "loader_version": info.loader_version,
-                # Updating downloads and installs on the machine the app runs on, which
-                # for a server on another computer is the wrong disk; the GTK app refuses
-                # the same way. Saying so here keeps the browser from offering it at all.
-                "can_update": not info.is_remote,
+                # Updating a Java server downloads and installs on the machine the app
+                # runs on, which for a server on another computer is the wrong disk; the
+                # GTK app refuses the same way. A Bedrock host fetches its own package,
+                # so that one can be updated wherever it lives.
+                "can_update": bedrock or not info.is_remote,
+                # Backups are only taken of folders on this computer.
+                "backs_up": not info.is_remote,
             }
         )
 
     def r_set_motd(self, server_id: str) -> None:
         self._require_mutation()
-        info = self._java_server(self._require_user(), server_id, JAVA_ONLY_SETTINGS)
+        info = self._server_for(self._require_user(), server_id)
         motd = str(self._body().get("motd", ""))
         if len(motd) > 200:
             raise HttpError(400, "That message of the day is too long")
@@ -488,7 +501,7 @@ class PanelHandler(BaseHTTPRequestHandler):
         config = ConfigManager(info.server_dir)
         if not config.try_load():
             raise HttpError(409, "Could not read this server's server.properties")
-        config.set_value("motd", motd)
+        config.set_value(self._motd_key(info), motd)
         try:
             config.save()
         except Exception as exc:
@@ -496,7 +509,7 @@ class PanelHandler(BaseHTTPRequestHandler):
         self._json({"ok": True, "motd": motd})
 
     def r_icon(self, server_id: str) -> None:
-        info = self._java_server(self._require_user(), server_id, JAVA_ONLY_PICTURE)
+        info = self._server_for(self._require_user(), server_id)
         data = self.panel.manager.icon_bytes(info)
         if not data:
             raise HttpError(404, "This server has no picture")
@@ -509,7 +522,7 @@ class PanelHandler(BaseHTTPRequestHandler):
 
     def r_set_icon(self, server_id: str) -> None:
         self._require_mutation()
-        info = self._java_server(self._require_user(), server_id, JAVA_ONLY_PICTURE)
+        info = self._server_for(self._require_user(), server_id)
         length = int(self.headers.get("Content-Length") or 0)
         if length > MAX_ICON_BYTES:
             raise HttpError(413, "That picture is too large")
@@ -532,14 +545,29 @@ class PanelHandler(BaseHTTPRequestHandler):
 
     def r_update_versions(self, server_id: str) -> None:
         """The Minecraft versions this server could move up to, newest first."""
-        info = self._java_server(self._require_user(), server_id, JAVA_ONLY_UPDATE)
+        info = self._server_for(self._require_user(), server_id)
         manager = self.panel.manager
+        if is_bedrock(info.edition):
+            # Mojang offers one release and one preview build; the preview is only on
+            # offer when it is ahead of what the server has, as in the GTK dialog.
+            options = [o for o in manager.bedrock_versions(info) if ServerManager.is_version_after(o.version, info.mc_version)]
+            self._json(
+                {
+                    "current": info.mc_version,
+                    "loader_type": None,
+                    "mc_versions": [o.version for o in options],
+                    "labels": {o.version: o.label for o in options},
+                }
+            )
+            return
         versions = manager.download_manager.fetch_game_versions_for_loader(info.loader_type)
         newer = [v for v in versions if ServerManager.is_version_after(v, info.mc_version)]
         self._json({"current": info.mc_version, "loader_type": info.loader_type, "mc_versions": newer})
 
     def r_loader_versions(self, server_id: str) -> None:
-        info = self._java_server(self._require_user(), server_id, JAVA_ONLY_UPDATE)
+        info = self._server_for(self._require_user(), server_id)
+        if is_bedrock(info.edition):
+            raise HttpError(409, "A Bedrock server has no loader")
         mc_version = self._query().get("mc_version", "").strip()
         if not mc_version:
             raise HttpError(400, "mc_version is required")
@@ -554,21 +582,27 @@ class PanelHandler(BaseHTTPRequestHandler):
 
     def r_update(self, server_id: str) -> None:
         self._require_mutation()
-        info = self._java_server(self._require_user(), server_id, JAVA_ONLY_UPDATE)
+        info = self._server_for(self._require_user(), server_id)
+        bedrock = is_bedrock(info.edition)
         body = self._body()
         mc_version = str(body.get("mc_version", "")).strip()
         loader_version = str(body.get("loader_version", "")).strip()
         if not mc_version:
             raise HttpError(400, "mc_version is required")
-        if info.is_remote:
+        if info.is_remote and not bedrock:
             # The install would download and unpack on this computer, into what is the
             # host's folder; the GTK app refuses for the same reason.
             raise HttpError(409, f"A server on {info.host.name} has to be updated from the app on that machine")
         process = self.panel.manager.get_existing_process(info.id)
         if process and process.is_running:
             raise HttpError(409, "Stop the server before updating it")
-        job = self.panel.new_job()
         manager = self.panel.manager
+        bedrock_option = None
+        if bedrock:
+            bedrock_option = next((o for o in manager.bedrock_versions(info) if o.version == mc_version), None)
+            if not bedrock_option:
+                raise HttpError(409, f"Bedrock {mc_version} is not on offer from Mojang any more")
+        job = self.panel.new_job()
         manager.begin_mod_operation(info.id)
 
         def progress(fraction: float, detail: str) -> None:
@@ -576,13 +610,16 @@ class PanelHandler(BaseHTTPRequestHandler):
 
         def worker() -> None:
             try:
-                ok, message = manager.update_server_runtime(
-                    info.id,
-                    mc_version,
-                    loader_version or None,
-                    progress_callback=progress,
-                    loader_type=info.loader_type,
-                )
+                if bedrock_option:
+                    ok, message = manager.update_bedrock_server(info.id, bedrock_option, progress_callback=progress)
+                else:
+                    ok, message = manager.update_server_runtime(
+                        info.id,
+                        mc_version,
+                        loader_version or None,
+                        progress_callback=progress,
+                        loader_type=info.loader_type,
+                    )
                 job.state = "done" if ok else "failed"
                 job.message = message
                 if ok:

@@ -23,7 +23,9 @@ os.environ["NIKSNAKS_HOSTING_DATA_DIR"] = _TMP.name
 
 import niksnaks_hosting.i18n  # noqa: E402,F401  installs the _() builtin
 from niksnaks_hosting.shared.backend import mod_installer  # noqa: E402
+from niksnaks_hosting.shared.backend.bedrock_manager import BedrockVersionOption  # noqa: E402
 from niksnaks_hosting.shared.backend.server_manager import ServerManager  # noqa: E402
+from niksnaks_hosting.version import __version__  # noqa: E402
 from niksnaks_hosting.web.auth import LOGIN_FAILURES_ALLOWED, SessionStore, UserStore  # noqa: E402
 from niksnaks_hosting.web.panel import WebPanel  # noqa: E402
 
@@ -114,8 +116,20 @@ class RouteTests(unittest.TestCase):
 
     def test_static_and_traversal(self):
         with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/") as r:
-            self.assertIn(b"<title>Niksnaks-Hosting</title>", r.read())
+            page = r.read()
+        self.assertIn(b"<title>Niksnaks-Hosting</title>", page)
+        # The script and stylesheet are asked for by version, so an update cannot leave
+        # a browser on the old ones.
+        self.assertIn(f'src="/app.js?v={__version__}"'.encode(), page)
+        self.assertNotIn(b"__APP_VERSION__", page)
         self.assertEqual(self.call("GET", "/../pyproject.toml")[0], 404)
+
+    def test_answers_carry_the_app_version(self):
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/me")
+        try:
+            urllib.request.urlopen(req)
+        except urllib.error.HTTPError as e:
+            self.assertEqual(e.headers["X-App-Version"], __version__)
 
     def test_login_needs_header_and_cookie_gates_routes(self):
         self.assertEqual(self.call("GET", "/api/me")[0], 401)
@@ -177,8 +191,6 @@ class RouteTests(unittest.TestCase):
 
     def test_settings_and_motd(self):
         self.login()
-        for path in ("/settings", "/icon", "/update/versions"):
-            self.assertEqual(self.call("GET", f"/api/servers/{self.bedrock.id}{path}")[0], 409)
         (self.mine.server_dir / "server.properties").write_text("motd=old\nmax-players=20\n", encoding="utf-8")
         settings = self.call("GET", f"/api/servers/{self.mine.id}/settings")[1]
         self.assertEqual(settings["motd"], "old")
@@ -192,6 +204,41 @@ class RouteTests(unittest.TestCase):
         self.assertIn("motd=hello there", written)
         self.assertIn("max-players=20", written)   # the rest of the file is left alone
         self.assertEqual(self.call("GET", f"/api/servers/{self.theirs.id}/settings")[0], 404)
+
+    def test_bedrock_server_has_settings_too(self):
+        self.login()
+        base = f"/api/servers/{self.bedrock.id}"
+        (self.bedrock.server_dir / "server.properties").write_text("server-name=old\ngamemode=survival\n", encoding="utf-8")
+        status, settings = self.call("GET", f"{base}/settings")
+        self.assertEqual(status, 200)
+        self.assertEqual(settings["edition"], "bedrock")
+        self.assertEqual(settings["motd"], "old")   # Bedrock's list line is server-name
+        self.assertTrue(settings["can_update"])
+        self.assertEqual(self.call("POST", f"{base}/settings/motd", {"motd": "Rocky"})[0], 200)
+        written = (self.bedrock.server_dir / "server.properties").read_text(encoding="utf-8")
+        self.assertIn("server-name=Rocky", written)
+        self.assertNotIn("motd=", written)
+        self.assertIn("gamemode=survival", written)
+
+        buffer = io.BytesIO()
+        Image.new("RGB", (64, 64), (200, 120, 10)).save(buffer, "PNG")
+        self.assertEqual(self.post_bytes(f"{base}/icon", buffer.getvalue())[0], 200)
+        self.assertTrue(self.call("GET", f"{base}/settings")[1]["has_icon"])
+
+        offered = [
+            BedrockVersionOption("1.21.90.3", "https://example.invalid/a.zip"),
+            BedrockVersionOption("1.20.0.1", "https://example.invalid/b.zip", preview=True),
+        ]
+        original = self.manager.bedrock_versions
+        self.manager.bedrock_versions = lambda info: offered
+        try:
+            versions = self.call("GET", f"{base}/update/versions")[1]
+            self.assertEqual(versions["mc_versions"], ["1.21.90.3"])   # the older preview is not an update
+            self.assertIn("1.21.90.3", versions["labels"])
+            self.assertEqual(self.call("GET", f"{base}/update/loader-versions?mc_version=1.21.90.3")[0], 409)
+            self.assertEqual(self.call("POST", f"{base}/update", {"mc_version": "9.9.9"})[0], 409)
+        finally:
+            self.manager.bedrock_versions = original
 
     def test_server_picture_round_trip(self):
         self.login()
@@ -212,7 +259,6 @@ class RouteTests(unittest.TestCase):
     def test_update_route_checks_its_arguments(self):
         self.login()
         self.assertEqual(self.call("POST", f"/api/servers/{self.mine.id}/update", {})[0], 400)
-        self.assertEqual(self.call("POST", f"/api/servers/{self.bedrock.id}/update", {"mc_version": "1.21.4"})[0], 409)
         self.assertEqual(self.call("GET", f"/api/servers/{self.mine.id}/update/loader-versions")[0], 400)
         self.assertEqual(self.call("POST", f"/api/servers/{self.theirs.id}/update", {"mc_version": "1.21.4"})[0], 404)
 

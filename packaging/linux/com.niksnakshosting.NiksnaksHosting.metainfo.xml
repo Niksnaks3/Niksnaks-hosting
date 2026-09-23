@@ -47,6 +47,15 @@
   <url type="homepage">https://github.com/Niksnaks3/Niksnaks-hosting</url>
   <url type="bugtracker">https://github.com/Niksnaks3/Niksnaks-hosting/issues</url>
   <releases>
+    <release version="1.5.2" date="2026-09-23">
+      <description>
+        <p>The web panel now fully supports every server:</p>
+        <ul>
+          <li>Bedrock servers get the Settings tab too: their picture, their server name and an updater that installs Mojang's newer Bedrock build while keeping worlds, server.properties and the allow list</li>
+          <li>After the app is updated, an open panel tab reloads itself instead of carrying on with the old page</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.5.1" date="2026-09-15">
       <description>
         <p>The web panel can now look after a Java server, not just run it:</p>

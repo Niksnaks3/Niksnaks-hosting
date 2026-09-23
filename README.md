@@ -217,15 +217,21 @@ drawn in the app's own colours:
   - **Metrics** — tiles plus two minutes of CPU, memory, TPS and player graphs.
   - **Mods** — the installed list, removal with dependency clean-up, and Modrinth search
     and install, filtered to the server's Minecraft version and loader.
-  - **Settings** — for a Java server: its picture (the one Minecraft shows in the server
+  - **Settings** — its picture (the one shown in the app and in Minecraft's server
     list), its message of the day, and the version updater — pick a newer Minecraft
     version and loader build, and the app makes a full backup, reinstalls the server and
     moves mods that no longer fit aside, exactly as the app's own updater does.
 
-The Mods and Settings tabs are hidden for a Bedrock server, whose files this app only
-manages from the desktop window. A server on another machine can have its picture and
-message of the day changed from the panel, but not its version: that install would run on
-the wrong computer, so the panel says so instead.
+A Bedrock server gets the same Settings tab: its picture, its server name (Bedrock's
+version of the message of the day) and an updater that installs Mojang's newer Bedrock
+build while keeping worlds, server.properties and the allow list. Only the Mods tab is
+hidden for it. A Java server on another machine can have its picture and message of the
+day changed from the panel, but not its version: that install would run on the wrong
+computer, so the panel says so instead. A Bedrock server on another machine can be
+updated, since that host downloads its own build, but no backup is made first.
+
+After the app is updated, an open panel tab reloads itself the next time it talks to the
+app, so nobody is left on the old page.
 
 Starting a server from the panel goes through the same checks as the app's Start button.
 For a server on another machine, CPU, memory and uptime are not available; the rest is.

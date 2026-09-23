@@ -6,6 +6,21 @@ const cssEscape = (s) => (window.CSS && CSS.escape ? CSS.escape(s) : String(s).r
 
 // ---------------------------------------------------------------- talking to the app
 
+// The version of the app this page was served by. When the app is updated underneath an
+// open tab, the routes may have changed shape, so the page reloads itself once instead of
+// running the old script against the new app.
+const PAGE_VERSION = (document.querySelector('meta[name="app-version"]') || {}).content || "";
+
+function checkAppVersion(res) {
+  const running = res.headers.get("X-App-Version");
+  if (!running || !PAGE_VERSION || running === PAGE_VERSION) return;
+  try {
+    if (sessionStorage.getItem("nh-reloaded-for") === running) return;
+    sessionStorage.setItem("nh-reloaded-for", running);
+  } catch (_) { /* no storage: reload anyway, the new page will match */ }
+  location.reload();
+}
+
 async function api(method, path, body) {
   const opts = { method, headers: { "X-Requested-With": "fetch" } };
   if (body !== undefined) {
@@ -13,6 +28,7 @@ async function api(method, path, body) {
     opts.body = JSON.stringify(body);
   }
   const res = await fetch(path, opts);
+  checkAppVersion(res);
   let data = {};
   try { data = await res.json(); } catch (_) { /* no body */ }
   if (res.status === 401 && !path.endsWith("/login")) {
@@ -492,11 +508,9 @@ function showServer(id, tab) {
   }
   setPage("server");
   renderHeader();
-  // Everything on both tabs -- mods, the picture, the MOTD, the updater -- is written
-  // by code that only knows Java Edition, so a Bedrock server gets neither.
+  // Mods are a Java Edition thing; every server has settings.
   $("tab-btn-mods").hidden = !state.current.has_mods;
-  $("tab-btn-settings").hidden = !state.current.has_mods;
-  if (!state.current.has_mods && (tab === "mods" || tab === "settings")) tab = "console";
+  if (!state.current.has_mods && tab === "mods") tab = "console";
   switchTab(tab);
   if (!changed) return;
 
@@ -995,7 +1009,7 @@ async function install(serverId, hit, version, list) {
 $("versions-close").addEventListener("click", () => $("versions-dialog").close());
 
 
-// ---------------------------------------------------------------- settings (Java only)
+// ---------------------------------------------------------------- settings
 
 function resetSettings() {
   state.settings = null;
@@ -1016,14 +1030,21 @@ function resetSettings() {
 
 async function loadSettings() {
   const s = state.current;
-  if (!s || !s.has_mods || state.settings) return;
+  if (!s || state.settings) return;
   const id = s.id, visit = state.visit;
   let data;
   try { data = await api("GET", `/api/servers/${id}/settings`); } catch (err) { toast(err.message); return; }
   if (state.visit !== visit) return;
   state.settings = data;
+  const bedrock = data.edition === "bedrock";
 
   paintIconPreview(data.has_icon ? `/api/servers/${id}/icon?t=${Date.now()}` : null);
+  // Bedrock keeps the line shown in the server list as server-name rather than motd.
+  $("motd-title").textContent = bedrock ? "Server name" : "Message of the day";
+  $("motd-label").textContent = bedrock ? "Server name" : "Message of the day";
+  $("motd-note").textContent = bedrock
+    ? "The name players see in their server list. It is read when the server starts, so restart it to show a new one."
+    : "The line players see under the server's name. It is read when the server starts, so restart it to show a new one.";
   $("motd").value = data.motd;
   $("motd").disabled = !data.properties_readable;
   $("motd-save").disabled = !data.properties_readable;
@@ -1032,6 +1053,8 @@ async function loadSettings() {
     : "This server's server.properties could not be read.";
 
   $("update-current").textContent = `Now on ${data.mc_version}`;
+  $("update-mc-label").textContent = bedrock ? "Bedrock version" : "Minecraft version";
+  $("update-loader-field").hidden = bedrock;
   $("update-loader-label").textContent = `${loaderLabel(s).split(" ")[0] || "Loader"} version`;
   if (!data.can_update) {
     updateNote("A server on another machine has to be updated from the app on that machine.");
@@ -1066,19 +1089,31 @@ async function loadUpdateVersions(id, visit) {
   try { data = await api("GET", `/api/servers/${id}/update/versions`); } catch (err) { mc.innerHTML = ""; updateNote(err.message); return; }
   if (state.visit !== visit || !state.current || state.current.id !== id) return;
   mc.innerHTML = "";
+  const bedrock = !data.loader_type;
   if (!data.mc_versions.length) {
-    mc.innerHTML = `<option>No newer Minecraft versions</option>`;
-    updateNote("This server is already on the newest Minecraft version its loader offers.");
+    mc.innerHTML = `<option>No newer versions</option>`;
+    updateNote(bedrock
+      ? "This server is already on the newest Bedrock version."
+      : "This server is already on the newest Minecraft version its loader offers.");
     return;
   }
-  updateNote("Updating makes a full backup first, then reinstalls the server. Mods that do not fit the new version are moved aside.");
+  const backup = state.settings && state.settings.backs_up
+    ? "Updating makes a full backup first, then"
+    : "No backup can be made of a server on another machine; updating";
+  updateNote(bedrock
+    ? `${backup} installs the new Bedrock server. Worlds, server.properties and the allow list are kept.`
+    : `${backup} reinstalls the server. Mods that do not fit the new version are moved aside.`);
   for (const v of data.mc_versions) {
     const opt = document.createElement("option");
     opt.value = v;
-    opt.textContent = v;
+    opt.textContent = (data.labels && data.labels[v]) || v;
     mc.appendChild(opt);
   }
   mc.disabled = false;
+  if (bedrock) {
+    $("update-run").disabled = state.updating;
+    return;
+  }
   loadLoaderVersions(id, visit);
 }
 
@@ -1109,7 +1144,7 @@ async function loadLoaderVersions(id, visit) {
 }
 
 $("update-mc").addEventListener("change", () => {
-  if (state.current) loadLoaderVersions(state.current.id, state.visit);
+  if (state.current && state.current.edition !== "bedrock") loadLoaderVersions(state.current.id, state.visit);
 });
 
 $("icon-file").addEventListener("change", (e) => {
@@ -1166,9 +1201,13 @@ $("update-form").addEventListener("submit", async (e) => {
   const mcVersion = $("update-mc").value, loaderVersion = $("update-loader").value;
   if (!mcVersion || $("update-mc").disabled) return;
   if (s.status !== "stopped") { toast("Stop the server before updating it"); return; }
+  const bedrock = s.edition === "bedrock";
+  const backup = state.settings && state.settings.backs_up ? "A full backup is made first" : "No backup can be made first";
   const ok = await confirmDialog(
     "Update server",
-    `Update ${s.name} from Minecraft ${s.mc_version} to ${mcVersion}? A full backup is made first, and mods that do not fit the new version are moved aside.`,
+    bedrock
+      ? `Update ${s.name} from Bedrock ${s.mc_version} to ${mcVersion}? ${backup}; worlds and settings are kept.`
+      : `Update ${s.name} from Minecraft ${s.mc_version} to ${mcVersion}? ${backup}, and mods that do not fit the new version are moved aside.`,
     "Update");
   if (!ok) return;
   runUpdate(s.id, mcVersion, loaderVersion);
