@@ -14,6 +14,7 @@ from niksnaks_hosting.i18n import set_language, setup_gettext
 from niksnaks_hosting.shared.backend.server_manager import ServerManager
 from niksnaks_hosting.shared.core.events import set_main_thread_dispatcher
 from niksnaks_hosting.shared.utils.constants import APP_ID
+from niksnaks_hosting.shared.utils.decoration_layout import with_minimize
 from niksnaks_hosting.shared.utils.deletion import (
     delete_registered,
     purge_pending_deletions,
@@ -43,6 +44,18 @@ class NiksnaksHostingApplication(Adw.Application):
 
     def do_startup(self):
         Adw.Application.do_startup(self)
+
+        # GNOME's title bar is 'appmenu:close', so the window had no minimize button there;
+        # put one beside close. Windows gets GTK's own 'menu:minimize,maximize,close' and is
+        # left as it is. Only written when it changes something: a value the app sets
+        # outranks the desktop's from then on.
+        # ponytail: read once, so a title-bar layout changed in the desktop's settings while
+        # the app runs applies after a restart.
+        settings = Gtk.Settings.get_default()
+        layout = settings.props.gtk_decoration_layout or ""
+        wanted = with_minimize(layout)
+        if wanted != layout:
+            settings.props.gtk_decoration_layout = wanted
 
         set_main_thread_dispatcher(lambda callback, *args, **kwargs: GLib.idle_add(callback, *args, **kwargs))
 

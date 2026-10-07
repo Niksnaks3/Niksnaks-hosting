@@ -139,6 +139,11 @@ select {
 }
 select:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
 select:disabled { opacity: .65; }
+/* iOS zooms the page in on a field under 16px when it gets focus, and stays zoomed, even
+   after a reload. "any" so an iPad with a trackpad attached is still covered. */
+@media (any-pointer: coarse) {
+  input, select { font-size: 16px; }
+}
 input[type="file"] { padding: .4rem; cursor: pointer; }
 input[type="file"]::file-selector-button {
   font: inherit; margin-right: .6rem; padding: .35rem .7rem; cursor: pointer;
@@ -218,6 +223,8 @@ input[type="file"]::file-selector-button {
 .page { display: flex; flex-direction: column; gap: 1.25rem; max-width: 1400px; }
 .page-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .page-header small { display: block; margin-top: .15rem; }
+/* A server name with no spaces would otherwise widen the page past a phone's screen. */
+.page-header h1 { overflow-wrap: anywhere; }
 .sync { display: inline-flex; align-items: center; gap: .35rem; font-size: .8rem; color: var(--ok); }
 .sync svg { width: 15px; height: 15px; }
 .sync.off { color: var(--muted); }

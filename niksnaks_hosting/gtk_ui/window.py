@@ -145,6 +145,11 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         prefs = self._server_manager.preferences
         if prefs.run_in_background_on_close and not self._quit_requested:
             self.set_visible(False)
+            # The title bar's minimize button leaves GTK set to minimize the window again the
+            # next time it is shown, and hiding does not clear that, so the tray's Show would
+            # bring it back minimized. Cleared here, while hidden: on a shown window
+            # unminimize() also unmaximizes it on Windows.
+            self.unminimize()
 
             if self._server_manager.is_any_server_running():
                 self._set_background_status(_("Server running"))
