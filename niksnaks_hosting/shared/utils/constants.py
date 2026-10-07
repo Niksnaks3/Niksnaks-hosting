@@ -9,7 +9,7 @@ from niksnaks_hosting.version import __version__
 APP_ID = "com.niksnakshosting.NiksnaksHosting"
 APP_NAME = "Niksnaks-Hosting"
 APP_VERSION = __version__
-APP_WEBSITE = ""
+APP_WEBSITE = "https://github.com/Niksnaks3/Niksnaks-hosting"
 
 def _default_data_dir() -> Path:
     if sys.platform == "win32":

@@ -23,6 +23,4 @@ def show_about_dialog(parent):
         _("Acknowledgements"),
         ["Fabric https://fabricmc.net", "Modrinth https://modrinth.com", "Playit https://playit.gg"],
     )
-    about.add_other_app("com.niksnakshosting.Crucible", "Crucible", _("View specs and stress test hardware"))
-    about.add_other_app("com.niksnakshosting.Carabiner", "Carabiner", _("Create and manage network tunnels"))
     about.present(parent)
