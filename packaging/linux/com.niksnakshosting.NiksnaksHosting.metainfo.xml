@@ -47,6 +47,20 @@
   <url type="homepage">https://github.com/Niksnaks3/Niksnaks-hosting</url>
   <url type="bugtracker">https://github.com/Niksnaks3/Niksnaks-hosting/issues</url>
   <releases>
+    <release version="1.6.1" date="2026-10-29">
+      <description>
+        <ul>
+          <li>Bedrock servers work with Mojang's newest server version again: the app sets the NetherNet connection type it now requires, so players can join</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.6.0" date="2026-10-29">
+      <description>
+        <ul>
+          <li>The app updates itself: when a new version is out, an Update button appears</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.5.3" date="2026-10-07">
       <description>
         <ul>
