@@ -35,6 +35,7 @@ mkdir -p dist
 flatpak-builder \
   --user \
   --force-clean \
+  --disable-rofiles-fuse \
   --install-deps-from=flathub \
   --repo="$REPO" \
   "${sign[@]}" \
