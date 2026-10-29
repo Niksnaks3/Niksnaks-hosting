@@ -32,6 +32,7 @@ class NiksnaksHostingApplication(Adw.Application):
         self._server_manager = None
         self._window = None
         self._web_panel = None
+        self._scheduler = None
         self._activate_in_background = False
         self._is_held_for_background = False
         self._tray_manager = None
@@ -77,6 +78,11 @@ class NiksnaksHostingApplication(Adw.Application):
 
         self._web_panel = WebPanel(self._server_manager)
         self.apply_web_panel_settings()
+
+        from niksnaks_hosting.shared.backend.scheduler import DailyScheduler
+
+        self._scheduler = DailyScheduler(self._server_manager)
+        self._scheduler.start()
 
         # Deletions a previous run promised but never carried out -- quit inside an
         # undo window, or a file that stayed locked -- are finished here, before the
@@ -190,6 +196,8 @@ class NiksnaksHostingApplication(Adw.Application):
 
         if self._window:
             self._window.shutdown_background()
+        if self._scheduler:
+            self._scheduler.stop()
         if self._web_panel:
             self._web_panel.stop()
         if self._server_manager:

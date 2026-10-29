@@ -16,7 +16,7 @@ from niksnaks_hosting.gtk_ui.loader_version_row import (
 )
 from niksnaks_hosting.shared.backend.config_manager import ConfigManager
 from niksnaks_hosting.shared.backend.download_manager import LoaderVersionOption
-from niksnaks_hosting.shared.backend.server_manager import ServerInfo, ServerManager
+from niksnaks_hosting.shared.backend.server_manager import DAILY_BACKUP_KINDS, ServerInfo, ServerManager
 from niksnaks_hosting.shared.utils.constants import (
     BEDROCK_CHAT_RESTRICTIONS,
     BEDROCK_DEFAULT_PORT,
@@ -129,6 +129,36 @@ class PropertiesView(Gtk.Box):
         resources.add(self._ram_row)
         page.add(resources)
         self._resources_group = resources
+
+        schedule = Adw.PreferencesGroup(
+            title=_("Daily Schedule"),
+            description=_("Runs every day at the chosen time while Niksnaks-Hosting is open"),
+        )
+        self._daily_restart_row = Adw.SwitchRow(
+            title=_("Daily Restart"),
+            subtitle=_("Restart the server if it is running"),
+        )
+        schedule.add(self._daily_restart_row)
+        self._daily_backup_row = Adw.ComboRow(
+            title=_("Daily Backup"),
+            subtitle=_("The server is stopped for the backup and started again"),
+            model=Gtk.StringList.new([_("Off"), _("World"), _("Full")]),
+        )
+        schedule.add(self._daily_backup_row)
+        self._daily_hour = Gtk.SpinButton.new_with_range(0, 23, 1)
+        self._daily_minute = Gtk.SpinButton.new_with_range(0, 59, 1)
+        time_box = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
+        for spin in (self._daily_hour, self._daily_minute):
+            spin.set_numeric(True)
+            spin.set_wrap(True)
+            spin.connect("output", self._on_time_spin_output)
+        time_box.append(self._daily_hour)
+        time_box.append(Gtk.Label(label=":"))
+        time_box.append(self._daily_minute)
+        self._daily_time_row = Adw.ActionRow(title=_("Time"))
+        self._daily_time_row.add_suffix(time_box)
+        schedule.add(self._daily_time_row)
+        page.add(schedule)
 
         java_group = Adw.PreferencesGroup(title=_("Java Runtime"))
 
@@ -363,6 +393,11 @@ class PropertiesView(Gtk.Box):
         if self._autostart_row:
             self._autostart_row.connect("notify::active", self._on_autostart_toggled)
 
+        self._daily_restart_row.connect("notify::active", self._on_schedule_changed)
+        self._daily_backup_row.connect("notify::selected", self._on_schedule_changed)
+        self._daily_hour.connect("value-changed", self._on_schedule_changed)
+        self._daily_minute.connect("value-changed", self._on_schedule_changed)
+
         if hasattr(self, "_jvm_args_row"):
             self._jvm_args_row.connect("changed", self._on_jvm_args_changed)
 
@@ -384,6 +419,22 @@ class PropertiesView(Gtk.Box):
 
             self._banner.set_title(err)
             self._banner.set_revealed(True)
+
+    @staticmethod
+    def _on_time_spin_output(spin):
+        spin.set_text(f"{int(spin.get_value()):02d}")
+        return True
+
+    def _on_schedule_changed(self, *_args):
+        if self._suppress_changes or not self._server_manager or not self._server_info:
+            return
+        backup = DAILY_BACKUP_KINDS[self._daily_backup_row.get_selected()]
+        at = f"{int(self._daily_hour.get_value()):02d}:{int(self._daily_minute.get_value()):02d}"
+        ok, err = self._server_manager.set_server_schedule(
+            self._server_info.id, self._daily_restart_row.get_active(), backup, at
+        )
+        if not ok:
+            self._show_toast(err)
 
     def _on_entry_apply(self, row, title):
         self._show_toast(_("Property updated"))
@@ -1068,6 +1119,15 @@ class PropertiesView(Gtk.Box):
 
         if hasattr(self, "_autostart_row") and self._server_info:
             self._autostart_row.set_active(getattr(self._server_info, "autostart", False))
+
+        if self._server_info:
+            info = self._server_info
+            self._daily_restart_row.set_active(info.daily_restart)
+            self._daily_backup_row.set_selected(DAILY_BACKUP_KINDS.index(info.daily_backup))
+            hour, minute = info.daily_time.split(":")
+            self._daily_hour.set_value(int(hour))
+            self._daily_minute.set_value(int(minute))
+            self._daily_backup_row.set_sensitive(not info.is_remote)
 
         for key, widget in self._widgets.items():
             if isinstance(widget, Adw.EntryRow):

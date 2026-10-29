@@ -294,6 +294,49 @@
                 <span id="update-detail" class="muted" aria-live="polite"></span>
               </div>
             </div>
+
+            <div id="admin-settings" class="tab-group" hidden>
+              <div class="split">
+                <div class="panel">
+                  <div class="panel-header"><h3><svg><use href="#i-memory"/></svg>Memory</h3><span class="tag">admin</span></div>
+                  <p class="note muted"><svg><use href="#i-warning"/></svg><span id="ram-note">Used from the next start of the server.</span></p>
+                  <form id="ram-form" class="settings-form">
+                    <label class="field"><span>Memory (MB)</span><input id="ram" type="number" step="256" required></label>
+                    <div class="row-actions">
+                      <button id="ram-save" type="submit" class="btn primary small"><span>Save memory</span></button>
+                    </div>
+                  </form>
+                </div>
+
+                <div class="panel">
+                  <div class="panel-header"><h3><svg><use href="#i-download"/></svg>Backup</h3><span class="tag">admin</span></div>
+                  <p class="note muted"><svg><use href="#i-warning"/></svg><span id="backup-note">Stop the server first. A world backup saves only the world, a full backup saves the whole server folder.</span></p>
+                  <div class="row-actions">
+                    <button id="backup-world" class="btn outline small" type="button"><span>World backup</span></button>
+                    <button id="backup-full" class="btn primary small" type="button"><span>Full backup</span></button>
+                  </div>
+                  <div id="backup-progress" hidden>
+                    <progress id="backup-bar" max="1" value="0" aria-label="Backup progress"></progress>
+                    <span id="backup-detail" class="muted" aria-live="polite"></span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-header"><h3><svg><use href="#i-clock"/></svg>Daily restart and backup</h3><span class="tag">admin</span></div>
+                <p class="note muted"><svg><use href="#i-warning"/></svg><span>Runs every day at this time while the app is open. A running server is stopped for the backup and started again.</span></p>
+                <form id="schedule-form" class="settings-form">
+                  <label class="field"><span>Time</span><input id="daily-time" type="time" required></label>
+                  <label class="field"><span>Daily restart</span>
+                    <select id="daily-restart"><option value="no">Off</option><option value="yes">On</option></select></label>
+                  <label class="field"><span>Daily backup</span>
+                    <select id="daily-backup"><option value="off">Off</option><option value="world">World</option><option value="full">Full</option></select></label>
+                  <div class="row-actions">
+                    <button id="schedule-save" type="submit" class="btn primary small"><span>Save schedule</span></button>
+                  </div>
+                </form>
+              </div>
+            </div>
           </section>
         </div>
       </div>

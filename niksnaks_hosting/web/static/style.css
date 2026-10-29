@@ -396,9 +396,10 @@ td.col-actions .busy svg { animation: spin 1.2s linear infinite; }
 .modal p { white-space: pre-line; }
 .modal .form-error { margin: .75rem 0 0; }
 progress { width: 100%; height: 8px; accent-color: var(--accent); }
-#install-progress, #update-progress { margin-top: .9rem; }
+#install-progress, #update-progress, #backup-progress { margin-top: .9rem; }
 
 /* settings */
+.tab-group { display: flex; flex-direction: column; gap: .8rem; }
 .settings-form { margin: 0; }
 .settings-form .field:last-of-type { margin-bottom: .6rem; }
 .row-actions { display: flex; justify-content: flex-end; gap: .5rem; }

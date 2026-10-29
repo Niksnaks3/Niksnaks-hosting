@@ -103,6 +103,7 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
 
         server_manager.connect("server-added", self._on_server_added)
         server_manager.connect("server-removed", self._on_server_removed)
+        server_manager.connect("daily-task-done", self._on_daily_task_done)
 
         self._status_poll_id = GLib.timeout_add(1000, self._poll_runtime_state)
 
@@ -257,6 +258,14 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
             self._current_server_id = None
             self._content_stack.set_visible_child_name("welcome")
 
+    def _on_daily_task_done(self, manager, server_id, ok, message):
+        info = manager.get_server(server_id)
+        name = info.name if info else server_id
+        if ok:
+            self.show_toast(_("{}: daily task done ({})").format(name, message))
+        else:
+            self.show_toast(_("{}: daily task failed: {}").format(name, message))
+
     def restore_from_background(self):
         return
 
@@ -297,7 +306,7 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         for sid in stopped_ids:
             self._apply_playit_runtime(sid, "stop")
             prefs = self._server_manager.preferences
-            if prefs.auto_backup_on_stop:
+            if prefs.auto_backup_on_stop and not self._server_manager.is_mod_operation_active(sid):
                 self._start_auto_backup(sid)
 
         started_ids = current_ids - previous_ids
