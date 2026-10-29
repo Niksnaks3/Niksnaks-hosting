@@ -27,6 +27,10 @@ if [ -n "${GPG_KEY_ID:-}" ]; then
   keys=(--gpg-keys=build/flatpak-key.gpg)
 fi
 
+if [ -f "$REPO/config" ]; then
+  mkdir -p "$REPO/refs/heads" "$REPO/refs/remotes" "$REPO/refs/mirrors" "$REPO/tmp" "$REPO/state" "$REPO/extensions"
+fi
+
 echo "==> Ensuring Flathub remote and GNOME runtime"
 flatpak remote-add --if-not-exists --user flathub "$FLATHUB"
 
