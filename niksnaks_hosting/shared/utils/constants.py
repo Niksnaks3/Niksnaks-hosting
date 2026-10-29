@@ -364,6 +364,11 @@ BEDROCK_DEFAULT_SERVER_PROPERTIES = {
     "disable-player-interaction": "false",
     "disable-custom-skins": "false",
     "chat-restriction": "None",
+    "transport": "nethernet",
+}
+
+BEDROCK_REQUIRED_SERVER_PROPERTIES = {
+    "transport": "nethernet",
 }
 
 BEDROCK_GAMEMODES = ["survival", "creative", "adventure"]

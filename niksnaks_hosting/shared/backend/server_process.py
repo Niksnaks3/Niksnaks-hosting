@@ -354,7 +354,13 @@ class ServerProcess(EventEmitter):
                 self._emit_output(f"[Niksnaks-Hosting] Error: {launch_error}\n")
                 return False
 
-            from niksnaks_hosting.shared.backend.bedrock_manager import BedrockManager
+            from niksnaks_hosting.shared.backend.bedrock_manager import BedrockManager, ensure_bedrock_properties
+
+            try:
+                for setting in ensure_bedrock_properties(self.server_dir):
+                    self._emit_output(f"[Niksnaks-Hosting] Set {setting} in server.properties\n")
+            except Exception:
+                pass
 
             env = BedrockManager().launch_env(self.server_dir)
 

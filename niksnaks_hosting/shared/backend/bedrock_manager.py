@@ -10,10 +10,12 @@ from typing import Any
 
 import requests
 
+from niksnaks_hosting.shared.backend.config_manager import ConfigManager
 from niksnaks_hosting.shared.remote.paths import is_remote
 from niksnaks_hosting.shared.utils.constants import (
     BEDROCK_BINARY_NAMES,
     BEDROCK_DOWNLOAD_LINKS_URL,
+    BEDROCK_REQUIRED_SERVER_PROPERTIES,
     BEDROCK_SERVER_BINARY,
     CACHE_DIR,
     get_bedrock_download_types,
@@ -28,6 +30,22 @@ BEDROCK_VERSION_RE = re.compile(r"bedrock-server-([0-9][0-9.]*)\.zip")
 # Mojang ships these with the package; they hold the user's own settings once a
 # server exists, so an update must not overwrite them.
 BEDROCK_PRESERVED_FILES = ("server.properties", "allowlist.json", "permissions.json", "whitelist.json")
+
+def ensure_bedrock_properties(server_dir: Any) -> list[str]:
+    config = ConfigManager(server_dir)
+    if not config.try_load() or not config.properties_path.exists():
+        return []
+
+    changed = []
+    for key, value in BEDROCK_REQUIRED_SERVER_PROPERTIES.items():
+        if config.get(key) != value:
+            config.set_value(key, value)
+            changed.append(f"{key}={value}")
+
+    if changed:
+        config.save()
+    return changed
+
 
 @dataclass(frozen=True)
 class BedrockVersionOption:
