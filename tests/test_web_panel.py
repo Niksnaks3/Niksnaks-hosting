@@ -262,6 +262,58 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(self.call("GET", f"/api/servers/{self.mine.id}/update/loader-versions")[0], 400)
         self.assertEqual(self.call("POST", f"/api/servers/{self.theirs.id}/update", {"mc_version": "1.21.4"})[0], 404)
 
+    def test_ram_and_schedule_are_admin_only(self):
+        self.login()
+        base = f"/api/servers/{self.mine.id}"
+        settings = self.call("GET", f"{base}/settings")[1]
+        self.assertFalse(settings["admin"])
+        self.assertNotIn("ram_mb", settings)
+        self.assertEqual(self.call("POST", f"{base}/settings/ram", {"ram_mb": 1024})[0], 403)
+        self.assertEqual(self.call("POST", f"{base}/backup", {"kind": "world"})[0], 403)
+        self.assertEqual(self.call("POST", f"{base}/settings/schedule", {"daily_time": "03:00"})[0], 403)
+
+    def test_admin_sets_ram_and_schedule(self):
+        self.login("boss", "adminpass")
+        base = f"/api/servers/{self.mine.id}"
+        settings = self.call("GET", f"{base}/settings")[1]
+        self.assertTrue(settings["admin"])
+        self.assertIn("ram_mb", settings)
+        self.assertEqual(self.call("POST", f"{base}/settings/ram", {"ram_mb": 1})[0], 400)
+        self.assertEqual(self.call("POST", f"{base}/settings/ram", {"ram_mb": "lots"})[0], 400)
+        self.assertEqual(self.call("POST", f"{base}/settings/ram", {"ram_mb": 768})[0], 200)
+        self.assertEqual(self.manager.get_server(self.mine.id).ram_mb, 768)
+        schedule = f"{base}/settings/schedule"
+        self.assertEqual(self.call("POST", schedule, {"daily_time": "25:00"})[0], 400)
+        self.assertEqual(self.call("POST", schedule, {"daily_time": "3:00", "daily_backup": "weekly"})[0], 400)
+        status, data = self.call(
+            "POST", schedule, {"daily_time": "3:05", "daily_restart": True, "daily_backup": "full"}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(data["daily_time"], "03:05")
+        info = self.manager.get_server(self.mine.id)
+        self.assertEqual((info.daily_restart, info.daily_backup), (True, "full"))
+        self.manager.set_server_schedule(self.mine.id, False, "off", "04:00")
+
+    def test_admin_makes_a_backup(self):
+        self.login("boss", "adminpass")
+        base = f"/api/servers/{self.mine.id}"
+        world = self.mine.server_dir / "world"
+        world.mkdir(parents=True, exist_ok=True)
+        (world / "level.dat").write_bytes(b"x")
+        self.assertEqual(self.call("POST", f"{base}/backup", {"kind": "nope"})[0], 400)
+        for kind in ("world", "full"):
+            status, data = self.call("POST", f"{base}/backup", {"kind": kind})
+            self.assertEqual(status, 202)
+            import time
+
+            for _ in range(50):
+                job = self.call("GET", f"/api/jobs/{data['job_id']}")[1]
+                if job["state"] != "running":
+                    break
+                time.sleep(0.1)
+            self.assertEqual(job["state"], "done", job["message"])
+            self.assertTrue(job["message"].endswith(".zip"))
+
     def test_event_stream_relays_console_output(self):
         self.login()
         got = []
@@ -304,6 +356,32 @@ class RouteTests(unittest.TestCase):
         thread.join(5)
         self.assertFalse(thread.is_alive(), "the stream should have been closed")
         self.assertFalse(any("secret" in line for line in got))
+
+
+class SchedulerTests(unittest.TestCase):
+    def test_runs_once_at_the_set_minute(self):
+        from datetime import datetime
+
+        from niksnaks_hosting.shared.backend.scheduler import DailyScheduler
+
+        manager = ServerManager()
+        info = manager.add_server("Daily", "1.21.1")
+        world = info.server_dir / "world"
+        world.mkdir(parents=True, exist_ok=True)
+        (world / "level.dat").write_bytes(b"x")
+        ran = []
+        manager.run_daily_task = lambda sid: ran.append(sid) or (True, "")
+        scheduler = DailyScheduler(manager)
+        self.assertEqual(scheduler.tick(datetime(2026, 1, 1, 4, 0)), [])
+        manager.set_server_schedule(info.id, False, "world", "04:00")
+        self.assertEqual(scheduler.tick(datetime(2026, 1, 1, 3, 59)), [])
+        self.assertEqual(scheduler.tick(datetime(2026, 1, 1, 4, 0)), [info.id])
+        self.assertEqual(scheduler.tick(datetime(2026, 1, 1, 4, 0, 30)), [])
+        self.assertEqual(scheduler.tick(datetime(2026, 1, 2, 4, 0)), [info.id])
+        del manager.run_daily_task
+        ok, message = manager.run_daily_task(info.id)
+        self.assertTrue(ok, message)
+        self.assertTrue(message.endswith(".zip"))
 
 
 class ModInstallerTests(unittest.TestCase):

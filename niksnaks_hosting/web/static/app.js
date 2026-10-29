@@ -98,6 +98,7 @@ const state = {
   settings: null,      // the server's settings once the tab has loaded them
   iconFile: null,      // the picture chosen but not saved yet
   updating: false,     // true while a version update is running
+  backingUp: false,
 };
 
 const STATUS_LABEL = { running: "Online", stopped: "Offline", starting: "Starting", stopping: "Stopping" };
@@ -1026,6 +1027,8 @@ function resetSettings() {
   $("update-progress").hidden = true;
   $("update-note").hidden = true;
   $("update-current").textContent = "";
+  $("admin-settings").hidden = true;
+  $("backup-progress").hidden = true;
 }
 
 async function loadSettings() {
@@ -1052,6 +1055,8 @@ async function loadSettings() {
     ? "a Niksnaks-Hosting server"
     : "This server's server.properties could not be read.";
 
+  paintAdminSettings(data);
+
   $("update-current").textContent = `Now on ${data.mc_version}`;
   $("update-mc-label").textContent = bedrock ? "Bedrock version" : "Minecraft version";
   $("update-loader-field").hidden = bedrock;
@@ -1061,6 +1066,25 @@ async function loadSettings() {
     return;
   }
   loadUpdateVersions(id, visit);
+}
+
+function paintAdminSettings(data) {
+  $("admin-settings").hidden = !data.admin;
+  if (!data.admin) return;
+  const ram = $("ram");
+  ram.min = data.min_ram_mb;
+  ram.max = data.max_ram_mb;
+  ram.value = data.ram_mb;
+  $("ram-note").textContent = `Between ${data.min_ram_mb} and ${data.max_ram_mb} MB. Used from the next start of the server.`;
+  $("daily-time").value = data.daily_time;
+  $("daily-restart").value = data.daily_restart ? "yes" : "no";
+  $("daily-backup").value = data.daily_backup;
+  $("daily-backup").disabled = !data.backs_up;
+  $("backup-world").disabled = !data.backs_up || state.backingUp;
+  $("backup-full").disabled = !data.backs_up || state.backingUp;
+  $("backup-note").textContent = data.backs_up
+    ? "Stop the server first. A world backup saves only the world, a full backup saves the whole server folder."
+    : "Backups are only made of servers on the app's own computer.";
 }
 
 function updateNote(text) {
@@ -1244,6 +1268,80 @@ async function runUpdate(id, mcVersion, loaderVersion) {
     $("update-detail").textContent = j.message;
     if (j.state === "running") { setTimeout(poll, 700); return; }
     finish(j.state === "done" ? j.message : `Update failed: ${j.message}`, j.state !== "done");
+  };
+  poll();
+}
+
+$("ram-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!state.current) return;
+  const id = state.current.id;
+  const ramMb = Number($("ram").value);
+  $("ram-save").disabled = true;
+  try {
+    await api("POST", `/api/servers/${id}/settings/ram`, { ram_mb: ramMb });
+    if (state.settings) state.settings.ram_mb = ramMb;
+    refreshServers().catch(() => {});
+    toast(state.current.status === "running"
+      ? `Memory set to ${ramMb} MB — restart the server to use it`
+      : `Memory set to ${ramMb} MB`);
+  } catch (err) { toast(err.message); }
+  $("ram-save").disabled = false;
+});
+
+$("schedule-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!state.current) return;
+  const id = state.current.id;
+  $("schedule-save").disabled = true;
+  try {
+    const data = await api("POST", `/api/servers/${id}/settings/schedule`, {
+      daily_time: $("daily-time").value,
+      daily_restart: $("daily-restart").value === "yes",
+      daily_backup: $("daily-backup").value,
+    });
+    if (state.settings) Object.assign(state.settings, data);
+    toast("Schedule saved");
+  } catch (err) { toast(err.message); }
+  $("schedule-save").disabled = false;
+});
+
+$("backup-world").addEventListener("click", () => runBackup("world"));
+$("backup-full").addEventListener("click", () => runBackup("full"));
+
+async function runBackup(kind) {
+  const s = state.current;
+  if (!s || state.backingUp) return;
+  if (s.status !== "stopped") { toast("Stop the server before backing it up"); return; }
+  const id = s.id;
+  state.backingUp = true;
+  $("backup-world").disabled = true;
+  $("backup-full").disabled = true;
+  $("backup-progress").hidden = false;
+  $("backup-bar").value = 0;
+  $("backup-detail").textContent = "Starting…";
+  const finish = (message, failed) => {
+    state.backingUp = false;
+    toast(message);
+    if (state.current && state.current.id === id) {
+      $("backup-progress").hidden = !failed;
+      $("backup-world").disabled = false;
+      $("backup-full").disabled = false;
+    }
+  };
+  let job;
+  try {
+    job = await api("POST", `/api/servers/${id}/backup`, { kind });
+  } catch (err) { finish(err.message, true); return; }
+  const poll = async () => {
+    let j;
+    try { j = await api("GET", `/api/jobs/${job.job_id}`); } catch (err) { finish(err.message, true); return; }
+    if (state.current && state.current.id === id) {
+      $("backup-bar").value = j.fraction;
+      $("backup-detail").textContent = j.message;
+    }
+    if (j.state === "running") { setTimeout(poll, 700); return; }
+    finish(j.state === "done" ? `Backup saved: ${j.message}` : `Backup failed: ${j.message}`, j.state !== "done");
   };
   poll();
 }

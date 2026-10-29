@@ -80,6 +80,8 @@ the people you share servers with.
 - **Players** — whitelist and ban list (Bedrock's allow list included).
 - **Backups** — world-only or full-server, restore from any of them, optional clean-up of
   backups older than 30 days.
+- **Daily restart and backup** — per server, in Properties → Daily Schedule: pick a time,
+  a daily restart and a world or full backup. Runs while the app is open.
 - **Playit.gg tunnels** — share the server without touching your router.
 - **Web panel** — a browser control panel hosted by the app itself; see
   [Web panel](#-web-panel).
@@ -236,6 +238,8 @@ drawn in the app's own colours:
     list), its message of the day, and the version updater — pick a newer Minecraft
     version and loader build, and the app makes a full backup, reinstalls the server and
     moves mods that no longer fit aside, exactly as the app's own updater does.
+    Administrators also get the server's memory, a world or full backup button, and the
+    daily restart and backup schedule.
 
 A Bedrock server gets the same Settings tab: its picture, its server name (Bedrock's
 version of the message of the day) and an updater that installs Mojang's newer Bedrock

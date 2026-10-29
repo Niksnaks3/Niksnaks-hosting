@@ -140,6 +140,20 @@ def _count_files(root: Path) -> int:
     """Files under *root*, for turning a copy loop into a fraction."""
     return sum(len(files) for _parent, _subdirs, files in os.walk(root))
 
+DAILY_BACKUP_KINDS = ("off", "world", "full")
+DEFAULT_DAILY_TIME = "04:00"
+
+
+def valid_daily_time(value: str) -> str:
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", value.strip())
+    if not match:
+        return ""
+    hour, minute = int(match.group(1)), int(match.group(2))
+    if hour > 23 or minute > 59:
+        return ""
+    return f"{hour:02d}:{minute:02d}"
+
+
 @dataclass(frozen=True)
 class FullBackupOption:
     """A full backup on disk that a new server can be built from."""
@@ -188,6 +202,10 @@ class ServerInfo:
         # other way: that record is the far app's, and writing over it would undo
         # settings it owns.
         self.mirrored: bool = bool(data.get("mirrored", False))
+        self.daily_restart: bool = bool(data.get("daily_restart", False))
+        backup = str(data.get("daily_backup", "off") or "off")
+        self.daily_backup: str = backup if backup in DAILY_BACKUP_KINDS else "off"
+        self.daily_time: str = valid_daily_time(str(data.get("daily_time", "") or "")) or DEFAULT_DAILY_TIME
 
     @property
     def is_remote(self) -> bool:
@@ -237,6 +255,9 @@ class ServerInfo:
             "host_id": self.host_id,
             "remote_id": self.remote_id,
             "mirrored": self.mirrored,
+            "daily_restart": self.daily_restart,
+            "daily_backup": self.daily_backup,
+            "daily_time": self.daily_time,
         }
 
 def _config_stamp() -> tuple[int, int]:
@@ -283,6 +304,9 @@ def _adopt_fields(existing: ServerInfo, fresh: ServerInfo) -> None:
         "host_id",
         "remote_id",
         "mirrored",
+        "daily_restart",
+        "daily_backup",
+        "daily_time",
     ):
         setattr(existing, field, getattr(fresh, field))
 
@@ -298,6 +322,8 @@ def _host_record(info: ServerInfo) -> dict:
     # Starting at boot is the unit's job, and it is already enabled for it. Asking the
     # far app to do it as well would have two things starting one world at once.
     record["autostart"] = False
+    record["daily_restart"] = False
+    record["daily_backup"] = "off"
     return record
 
 
@@ -730,6 +756,55 @@ class ServerManager(EventEmitter):
             if proc:
                 proc.ram_mb = ram_mb
             self.emit_on_main_thread("server-changed", server_id)
+
+    def set_server_schedule(self, server_id: str, restart: bool, backup: str, at: str) -> tuple[bool, str]:
+        info = self._servers.get(server_id)
+        if not info:
+            return False, _("Server not found.")
+        if backup not in DAILY_BACKUP_KINDS:
+            return False, _("Unknown backup kind.")
+        at = valid_daily_time(at)
+        if not at:
+            return False, _("The time has to be HH:MM.")
+        info.daily_restart = bool(restart)
+        info.daily_backup = backup
+        info.daily_time = at
+        self._save()
+        self.emit_on_main_thread("server-changed", server_id)
+        return True, ""
+
+    def create_backup(self, server_id: str, kind: str, progress_callback=None) -> tuple[bool, str]:
+        if kind == "full":
+            return self.create_full_backup(server_id)
+        return self.create_world_backup(server_id, progress_callback=progress_callback)
+
+    def run_daily_task(self, server_id: str) -> tuple[bool, str]:
+        info = self._servers.get(server_id)
+        if not info:
+            return False, _("Server not found.")
+        backup = info.daily_backup if not info.is_remote else "off"
+        if not info.daily_restart and backup == "off":
+            return True, ""
+        if self.is_mod_operation_active(server_id):
+            return False, _("Mods are being installed or updated.")
+        process = self.get_process(server_id)
+        was_running = bool(process and process.is_running)
+        if backup == "off":
+            if was_running:
+                self.restart_server(server_id)
+                return True, _("Restarted")
+            return True, ""
+
+        self.begin_mod_operation(server_id)
+        try:
+            if was_running:
+                process.stop_and_wait()
+            ok, message = self.create_backup(server_id, backup)
+        finally:
+            self.end_mod_operation(server_id)
+        if was_running:
+            self.start_server(server_id)
+        return ok, message
 
     @staticmethod
     def _clear_loader_runtime(root: Path) -> None:

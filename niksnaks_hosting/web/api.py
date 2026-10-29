@@ -26,10 +26,12 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from niksnaks_hosting.shared.backend import mod_installer, modrinth_client
 from niksnaks_hosting.shared.backend.config_manager import ConfigManager
-from niksnaks_hosting.shared.backend.server_manager import ServerManager
+from niksnaks_hosting.shared.backend.server_manager import DAILY_BACKUP_KINDS, ServerManager
 from niksnaks_hosting.shared.backend.stats import host_sample
 from niksnaks_hosting.shared.utils.constants import (
     APP_VERSION,
+    MAX_RAM_MB,
+    MIN_RAM_MB,
     ServerStatus,
     is_bedrock,
     normalize_loader,
@@ -190,6 +192,10 @@ class PanelHandler(BaseHTTPRequestHandler):
         # cannot carry a custom header; the fetch() calls in app.js always do.
         if self.headers.get("X-Requested-With") != "fetch":
             raise HttpError(403, "Missing X-Requested-With header")
+
+    def _require_admin(self, user) -> None:
+        if not user.admin:
+            raise HttpError(403, "Only an admin can do that")
 
     def _server_for(self, user, server_id: str):
         info = self.panel.manager.get_server(server_id)
@@ -467,12 +473,25 @@ class PanelHandler(BaseHTTPRequestHandler):
         return MOTD_KEY_BEDROCK if is_bedrock(info.edition) else MOTD_KEY_JAVA
 
     def r_settings(self, server_id: str) -> None:
-        info = self._server_for(self._require_user(), server_id)
+        user = self._require_user()
+        info = self._server_for(user, server_id)
         bedrock = is_bedrock(info.edition)
         config = ConfigManager(info.server_dir)
         readable = config.try_load()
+        admin = {}
+        if user.admin:
+            admin = {
+                "ram_mb": info.ram_mb,
+                "min_ram_mb": MIN_RAM_MB,
+                "max_ram_mb": MAX_RAM_MB,
+                "daily_restart": info.daily_restart,
+                "daily_backup": info.daily_backup,
+                "daily_time": info.daily_time,
+            }
         self._json(
             {
+                "admin": user.admin,
+                **admin,
                 "edition": info.edition,
                 "motd": config.get(self._motd_key(info), "") if readable else "",
                 "properties_readable": readable,
@@ -507,6 +526,81 @@ class PanelHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             raise HttpError(409, f"Could not save server.properties: {exc}") from None
         self._json({"ok": True, "motd": motd})
+
+    def r_set_ram(self, server_id: str) -> None:
+        self._require_mutation()
+        user = self._require_user()
+        info = self._server_for(user, server_id)
+        self._require_admin(user)
+        try:
+            ram_mb = int(self._body().get("ram_mb"))
+        except (TypeError, ValueError):
+            raise HttpError(400, "ram_mb has to be a number") from None
+        if not MIN_RAM_MB <= ram_mb <= MAX_RAM_MB:
+            raise HttpError(400, f"Memory has to be between {MIN_RAM_MB} and {MAX_RAM_MB} MB")
+        self.panel.manager.update_server_ram(info.id, ram_mb)
+        self._json({"ok": True, "ram_mb": ram_mb})
+
+    def r_set_schedule(self, server_id: str) -> None:
+        self._require_mutation()
+        user = self._require_user()
+        info = self._server_for(user, server_id)
+        self._require_admin(user)
+        body = self._body()
+        backup = str(body.get("daily_backup", "off"))
+        if info.is_remote and backup != "off":
+            raise HttpError(409, "Backups are only made of servers on this computer")
+        ok, message = self.panel.manager.set_server_schedule(
+            info.id, bool(body.get("daily_restart")), backup, str(body.get("daily_time", ""))
+        )
+        if not ok:
+            raise HttpError(400, message)
+        self._json(
+            {
+                "ok": True,
+                "daily_restart": info.daily_restart,
+                "daily_backup": info.daily_backup,
+                "daily_time": info.daily_time,
+            }
+        )
+
+    def r_backup(self, server_id: str) -> None:
+        self._require_mutation()
+        user = self._require_user()
+        info = self._server_for(user, server_id)
+        self._require_admin(user)
+        kind = str(self._body().get("kind", ""))
+        if kind not in DAILY_BACKUP_KINDS or kind == "off":
+            raise HttpError(400, "kind has to be world or full")
+        if info.is_remote:
+            raise HttpError(409, "Backups are only made of servers on this computer")
+        manager = self.panel.manager
+        process = manager.get_existing_process(info.id)
+        if process and process.is_running:
+            raise HttpError(409, "Stop the server before backing it up")
+        if manager.is_mod_operation_active(info.id):
+            raise HttpError(409, "Something else is running on this server; try again when it is done")
+        job = self.panel.new_job()
+        manager.begin_mod_operation(info.id)
+
+        def progress(fraction: float, detail: str) -> None:
+            job.fraction, job.message = float(fraction), str(detail)
+
+        def worker() -> None:
+            try:
+                ok, message = manager.create_backup(info.id, kind, progress_callback=progress)
+                job.state = "done" if ok else "failed"
+                job.message = message
+                if ok:
+                    job.fraction = 1.0
+            except Exception as exc:
+                job.state, job.message = "failed", str(exc)
+            finally:
+                job.finished_at = time.time()
+                manager.end_mod_operation(info.id)
+
+        threading.Thread(target=worker, daemon=True, name=f"web-backup-{job.id[:8]}").start()
+        self._json({"job_id": job.id}, 202)
 
     def r_icon(self, server_id: str) -> None:
         info = self._server_for(self._require_user(), server_id)
@@ -665,6 +759,9 @@ ROUTES: list[Route] = [
     _r("POST", rf"/api/servers/{SID}/mods/install", PanelHandler.r_install),
     _r("GET", rf"/api/servers/{SID}/settings", PanelHandler.r_settings),
     _r("POST", rf"/api/servers/{SID}/settings/motd", PanelHandler.r_set_motd),
+    _r("POST", rf"/api/servers/{SID}/settings/ram", PanelHandler.r_set_ram),
+    _r("POST", rf"/api/servers/{SID}/settings/schedule", PanelHandler.r_set_schedule),
+    _r("POST", rf"/api/servers/{SID}/backup", PanelHandler.r_backup),
     _r("GET", rf"/api/servers/{SID}/icon", PanelHandler.r_icon),
     _r("POST", rf"/api/servers/{SID}/icon", PanelHandler.r_set_icon),
     _r("GET", rf"/api/servers/{SID}/update/versions", PanelHandler.r_update_versions),
