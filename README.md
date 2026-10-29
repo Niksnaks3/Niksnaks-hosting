@@ -10,7 +10,7 @@ A desktop app that creates, runs and looks after Minecraft servers — Java or B
 this computer or on another one — and can hand them out to friends through a web panel.
 
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.5.3-brightgreen.svg)](https://github.com/Niksnaks3/Niksnaks-hosting/releases)
+[![Version](https://img.shields.io/badge/version-1.6.0-brightgreen.svg)](https://github.com/Niksnaks3/Niksnaks-hosting/releases)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey.svg)](#-installation)
 [![Python](https://img.shields.io/badge/python-3.13%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![GTK4](https://img.shields.io/badge/GTK-4%20%2F%20libadwaita-4A86CF.svg?logo=gnome&logoColor=white)](https://gtk.org/)
@@ -226,7 +226,7 @@ drawn in the app's own colours:
   are on, and an *All servers* table with start/stop/restart buttons, live CPU and memory
   bars, players, port, version and status.
 - **Server page** — a details card (status, started, uptime, CPU, memory, players, TPS,
-  version, loader, port, memory limit) and three tabs:
+  version, loader, port, memory limit) and four tabs:
   - **Terminal** — the live console with coloured log levels, a command box with ↑/↓
     history, Start/Restart/Stop, and a *Jump to latest* button when you've scrolled up.
   - **Metrics** — tiles plus two minutes of CPU, memory, TPS and player graphs.
@@ -258,8 +258,8 @@ the background — and stops when you quit.
 > The panel speaks plain HTTP and is meant for your own network. Before exposing it to the
 > internet, put a reverse proxy with HTTPS in front (Caddy or nginx are a few lines each)
 > and forward only that. Anyone you give a server to can run any console command on it, so
-> treat a login like a key, and update or reinstall its server. Logins are stored hashed in `web_users.json` in the data
-> folder. Windows may ask to allow the app through the firewall the first time it starts.
+> treat a login like a key. Logins are stored hashed in `web_users.json` in the data folder.
+> Windows may ask to allow the app through the firewall the first time it starts.
 
 ## 🛠 Development
 
