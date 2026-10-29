@@ -227,6 +227,15 @@ class RemoteServerProcess(ServerProcess):
                 "Starting it in two places at once would damage the world.\n"
             )
 
+        if self.is_bedrock:
+            from niksnaks_hosting.shared.backend.bedrock_manager import ensure_bedrock_properties
+
+            try:
+                for setting in ensure_bedrock_properties(self.server_dir):
+                    self._emit_output(f"[Niksnaks-Hosting] Set {setting} in server.properties\n")
+            except Exception:
+                pass
+
         self._emit_output(start_message)
         self._emit_output(f"[Niksnaks-Hosting] Command: {' '.join(command)}\n")
 
