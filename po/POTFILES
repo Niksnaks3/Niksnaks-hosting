@@ -52,3 +52,4 @@ niksnaks_hosting/shared/utils/factory_reset.py
 niksnaks_hosting/gtk_ui/dialogs/web_panel.py
 niksnaks_hosting/shared/backend/mod_installer.py
 niksnaks_hosting/web/panel.py
+niksnaks_hosting/gtk_ui/updater.py

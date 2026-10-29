@@ -407,12 +407,13 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
     ):
 
         toast = Adw.Toast(title=message)
-        toast.set_timeout(max(1, int(timeout)))
+        toast.set_timeout(max(0, int(timeout)))
         if button_label:
             toast.set_button_label(button_label)
             if on_button:
                 toast.connect("button-clicked", lambda *_args: on_button())
         self._toast_overlay.add_toast(toast)
+        return toast
 
     def clear_playit_auto_start_pause(self, server_id: str):
         self._playit_autostart_paused_ids.discard(server_id)

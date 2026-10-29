@@ -9,6 +9,7 @@ from pathlib import Path
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
+from niksnaks_hosting.gtk_ui.updater import AppUpdater
 from niksnaks_hosting.gtk_ui.window import NiksnaksHostingWindow
 from niksnaks_hosting.i18n import set_language, setup_gettext
 from niksnaks_hosting.shared.backend.server_manager import ServerManager
@@ -35,6 +36,8 @@ class NiksnaksHostingApplication(Adw.Application):
         self._is_held_for_background = False
         self._tray_manager = None
         self._shortcuts_dialog = None
+        self._updater = None
+        self._after_shutdown = []
 
     def do_command_line(self, command_line):
         args = command_line.get_arguments()
@@ -154,6 +157,7 @@ class NiksnaksHostingApplication(Adw.Application):
                     application=self,
                 )
             self._window.restore_from_background()
+            self._start_updater()
             return
 
         if not self._window:
@@ -164,6 +168,15 @@ class NiksnaksHostingApplication(Adw.Application):
 
         self._window.restore_from_background()
         self._window.present()
+        self._start_updater()
+
+    def _start_updater(self):
+        if self._updater is None:
+            self._updater = AppUpdater(self, lambda: self._window)
+            self._updater.start()
+
+    def run_after_shutdown(self, callback):
+        self._after_shutdown.append(callback)
 
     def do_shutdown(self):
         if sys.platform == "win32":
@@ -197,6 +210,13 @@ class NiksnaksHostingApplication(Adw.Application):
             hosts_module.close_shared_hosts()
 
         set_main_thread_dispatcher(None)
+
+        for callback in self._after_shutdown:
+            try:
+                callback()
+            except Exception:
+                pass
+
         Adw.Application.do_shutdown(self)
 
     def _load_css(self):
