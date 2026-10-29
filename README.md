@@ -106,6 +106,7 @@ the people you share servers with.
 
 Download `Niksnaks-Hosting-<version>-Setup.exe` from the
 [Releases page](https://github.com/Niksnaks3/Niksnaks-hosting/releases) and run it.
+From then on the app checks for new versions itself and offers to install them.
 
 <details>
 <summary>Building the Windows installer yourself</summary>
@@ -121,6 +122,20 @@ shell is the supported one.
 </details>
 
 ### Linux — Flatpak (recommended)
+
+Download `Niksnaks-Hosting-<version>.flatpak` from the
+[Releases page](https://github.com/Niksnaks3/Niksnaks-hosting/releases) and install it:
+
+```bash
+flatpak install --user Niksnaks-Hosting-*.flatpak
+```
+
+It updates like any other Flatpak — `flatpak update`, GNOME Software, or the **Update**
+button the app shows when a new version is out. A copy installed from a bundle made
+before updates were added cannot update itself; install the new bundle once with
+`--reinstall`.
+
+To build a bundle yourself:
 
 ```bash
 ./packaging/flatpak/build.sh
@@ -256,6 +271,35 @@ python -m unittest
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow before opening a patch.
+
+### Releasing
+
+Pushing a tag builds both versions on GitHub Actions
+([`release.yml`](.github/workflows/release.yml)), publishes the GitHub Release with the
+Windows installer and the Flatpak bundle, and updates the Flatpak repo on GitHub Pages
+that installed copies update from.
+
+1. Raise `__version__` in `niksnaks_hosting/version.py`.
+2. Commit, then tag and push:
+
+   ```bash
+   git tag Release-1.6.0 && git push origin Release-1.6.0
+   ```
+
+One-time setup:
+
+- **GitHub Pages** — after the first release has run, go to *Settings → Pages* and
+  publish from the `gh-pages` branch, folder `/ (root)`.
+- **Signing (recommended)** — create a GPG key without a passphrase and save its private
+  key as the repository secret `FLATPAK_GPG_PRIVATE_KEY`:
+
+  ```bash
+  gpg --batch --passphrase '' --quick-gen-key "Niksnaks-Hosting Flatpak" ed25519 sign never
+  gpg --armor --export-secret-keys "Niksnaks-Hosting Flatpak"
+  ```
+
+  Add it before the first release: copies installed from an unsigned bundle never
+  check signatures.
 
 ### Project layout
 

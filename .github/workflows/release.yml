@@ -1,0 +1,155 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "Release-*"
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches version.py
+        id: read
+        run: |
+          version="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' niksnaks_hosting/version.py)"
+          tag_version="${GITHUB_REF_NAME#Release-}"
+          tag_version="${tag_version#v}"
+          if [ "$tag_version" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match version.py ($version)"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          pacboy: >-
+            gtk4:p
+            libadwaita:p
+            librsvg:p
+            gettext-tools:p
+            python:p
+            python-gobject:p
+            python-cairo:p
+            pyinstaller:p
+            python-requests:p
+            python-certifi:p
+            python-psutil:p
+            python-pillow:p
+            python-tomlkit:p
+            python-paramiko:p
+            python-cryptography:p
+            python-bcrypt:p
+            python-pynacl:p
+
+      - name: Build installer
+        shell: msys2 {0}
+        run: |
+          export ISCC="$(ls -d /c/Program\ Files*/Inno\ Setup*/ISCC.exe | head -n 1)"
+          ./packaging/windows/build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.exe
+          if-no-files-found: error
+
+  flatpak:
+    needs: version
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the published Flatpak repo
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git clone --depth 1 --branch gh-pages "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" site; then
+            rm -rf site/.git
+          else
+            rm -rf site
+            mkdir -p site
+          fi
+
+      - name: Build repo and bundle
+        shell: bash
+        env:
+          FLATPAK_GPG_PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          name="${GITHUB_REPOSITORY#*/}"
+          export REPO="$PWD/site/repo"
+          export REPO_URL="https://${owner}.github.io/${name}/repo/"
+          if [ -n "$FLATPAK_GPG_PRIVATE_KEY" ]; then
+            export GPG_HOMEDIR="$(mktemp -d)"
+            chmod 700 "$GPG_HOMEDIR"
+            printf '%s\n' "$FLATPAK_GPG_PRIVATE_KEY" | gpg --homedir "$GPG_HOMEDIR" --batch --import
+            export GPG_KEY_ID="$(gpg --homedir "$GPG_HOMEDIR" --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')"
+          fi
+          ./packaging/flatpak/publish.sh
+          tar -cf dist/site.tar -C site .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: [version, windows, flatpak]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish the Flatpak repo to GitHub Pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir site
+          tar -xf artifacts/flatpak/site.tar -C site
+          touch site/.nojekyll
+          cd site
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Flatpak repo for $GITHUB_REF_NAME"
+          git push -q --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Niksnaks-Hosting ${{ needs.version.outputs.version }}
+          generate_release_notes: true
+          files: |
+            artifacts/windows/*.exe
+            artifacts/flatpak/*.flatpak
