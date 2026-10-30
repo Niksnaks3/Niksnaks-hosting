@@ -117,11 +117,17 @@ jobs:
           name="${GITHUB_REPOSITORY#*/}"
           export REPO="$PWD/site/repo"
           export REPO_URL="https://${owner}.github.io/${name}/repo/"
-          if [ -n "$FLATPAK_GPG_PRIVATE_KEY" ]; then
-            export GPG_HOMEDIR="$(mktemp -d)"
-            chmod 700 "$GPG_HOMEDIR"
-            printf '%s\n' "$FLATPAK_GPG_PRIVATE_KEY" | gpg --homedir "$GPG_HOMEDIR" --batch --import
-            export GPG_KEY_ID="$(gpg --homedir "$GPG_HOMEDIR" --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')"
+          if [ -z "$FLATPAK_GPG_PRIVATE_KEY" ]; then
+            echo "::error::The repository secret FLATPAK_GPG_PRIVATE_KEY is missing. Without it the app's Update button cannot install Flatpak updates."
+            exit 1
+          fi
+          export GPG_HOMEDIR="$(mktemp -d)"
+          chmod 700 "$GPG_HOMEDIR"
+          printf '%s\n' "$FLATPAK_GPG_PRIVATE_KEY" | gpg --homedir "$GPG_HOMEDIR" --batch --import
+          export GPG_KEY_ID="$(gpg --homedir "$GPG_HOMEDIR" --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')"
+          if [ -z "$GPG_KEY_ID" ]; then
+            echo "::error::FLATPAK_GPG_PRIVATE_KEY does not hold a usable private key."
+            exit 1
           fi
           ./packaging/flatpak/publish.sh
           tar -cf dist/site.tar -C site .
