@@ -294,16 +294,16 @@ One-time setup:
 
 - **GitHub Pages** — after the first release has run, go to *Settings → Pages* and
   publish from the `gh-pages` branch, folder `/ (root)`.
-- **Signing (recommended)** — create a GPG key without a passphrase and save its private
-  key as the repository secret `FLATPAK_GPG_PRIVATE_KEY`:
+- **Signing (required)** — create a GPG key without a passphrase and save its private
+  key as the repository secret `FLATPAK_GPG_PRIVATE_KEY`. The release build stops
+  without it, because the app's Update button only installs signed Flatpak updates:
 
   ```bash
   gpg --batch --passphrase '' --quick-gen-key "Niksnaks-Hosting Flatpak" ed25519 sign never
   gpg --armor --export-secret-keys "Niksnaks-Hosting Flatpak"
   ```
 
-  Add it before the first release: copies installed from an unsigned bundle never
-  check signatures.
+  Copies installed from an unsigned bundle have to install a signed one once by hand.
 
 ### Project layout
 
