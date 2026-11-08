@@ -12,11 +12,16 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Adw, GLib, Gtk
+from gi.repository import Adw, Gio, GLib, Gtk
 
 from niksnaks_hosting.gtk_ui.dialogs.progress_dialog import ProgressDialog
 from niksnaks_hosting.shared.backend.server_manager import ServerInfo, ServerManager
-from niksnaks_hosting.shared.utils.constants import LOADER_NEOFORGE, get_loader_display_name, is_bedrock
+from niksnaks_hosting.shared.utils.constants import (
+    BEDROCK_WORLDS_DIR,
+    LOADER_NEOFORGE,
+    get_loader_display_name,
+    is_bedrock,
+)
 from niksnaks_hosting.shared.remote.paths import is_remote
 from niksnaks_hosting.shared.utils.deletion import (
     TRASH_DIR_NAME,
@@ -27,6 +32,15 @@ from niksnaks_hosting.shared.utils.deletion import (
 
 from .mixins import BackupsMixin, CurseForgeMixin, ModrinthMixin, ModsMixin, PlayersMixin, WorldsMixin
 from .utils import *
+
+WATCH_DEBOUNCE_MS = 500
+REMOTE_WATCH_SECONDS = 5
+WATCHED_FILE_NAMES = ("server.properties", ".niksnaks-hosting-incompatible-components.json")
+CONTENT_EVENTS = (
+    Gio.FileMonitorEvent.CHANGED,
+    Gio.FileMonitorEvent.CHANGES_DONE_HINT,
+    Gio.FileMonitorEvent.ATTRIBUTE_CHANGED,
+)
 
 class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, CurseForgeMixin, WorldsMixin):
     def __init__(self):
@@ -63,6 +77,12 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
         self._disabled_expander: Adw.ExpanderRow | None = None
         self._worlds_snapshot: tuple[tuple[str, tuple[str, ...]], ...] = tuple()
         self._disabled_snapshot: tuple[tuple[str, str, str], ...] = tuple()
+        self._watch_active = False
+        self._watch_generation = 0
+        self._watch_monitors: dict[str, Gio.FileMonitor] = {}
+        self._watch_check_id = 0
+        self._watch_poll_id = 0
+        self._watch_busy = False
 
         self._backups_group: Adw.PreferencesGroup | None = None
         self._backups_row: Adw.ActionRow | None = None
@@ -89,6 +109,9 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
         except Exception:
             pass
         self._nav.push(self._root_page)
+
+        self.connect("map", self._on_mapped)
+        self.connect("unmap", self._on_unmapped)
 
     def _build_root_content(self) -> Gtk.Widget:
         scroll = Gtk.ScrolledWindow()
@@ -182,6 +205,7 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
         return scroll
 
     def set_server(self, server_info: ServerInfo, server_manager: ServerManager):
+        self._stop_watching()
         self._pop_to_root()
         self._server_info = server_info
         self._server_manager = server_manager
@@ -198,6 +222,8 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
         self._refresh_modpack_row_subtitles()
         self._refresh_backups_row_subtitle()
         self._rebuild_lists()
+        if self.get_mapped():
+            self._start_watching()
 
     def _refresh_modpack_row_subtitles(self) -> None:
         """Say up front what each modpack browser will show.
@@ -235,6 +261,122 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
         disabled_snapshot = self._build_disabled_snapshot()
         if force or snapshot != self._worlds_snapshot or disabled_snapshot != self._disabled_snapshot:
             self._rebuild_lists()
+
+    def _on_mapped(self, *_args) -> None:
+        self._start_watching()
+
+    def _on_unmapped(self, *_args) -> None:
+        self._stop_watching()
+
+    def _start_watching(self) -> None:
+        self._stop_watching()
+        if not self._server_info:
+            return
+        self._watch_active = True
+        if self._is_remote():
+            self._watch_poll_id = GLib.timeout_add_seconds(REMOTE_WATCH_SECONDS, self._on_remote_watch_due)
+        else:
+            self._schedule_worlds_check()
+
+    def _stop_watching(self) -> None:
+        self._watch_active = False
+        self._watch_generation += 1
+        self._watch_busy = False
+        if self._watch_check_id:
+            GLib.source_remove(self._watch_check_id)
+            self._watch_check_id = 0
+        if self._watch_poll_id:
+            GLib.source_remove(self._watch_poll_id)
+            self._watch_poll_id = 0
+        for monitor in self._watch_monitors.values():
+            monitor.cancel()
+        self._watch_monitors.clear()
+
+    def _schedule_worlds_check(self) -> None:
+        if self._watch_check_id:
+            GLib.source_remove(self._watch_check_id)
+        self._watch_check_id = GLib.timeout_add(WATCH_DEBOUNCE_MS, self._on_worlds_check_due)
+
+    def _on_worlds_check_due(self) -> bool:
+        self._watch_check_id = 0
+        if self._watch_active:
+            self._sync_dir_monitors()
+            self.refresh_worlds_if_changed()
+        return False
+
+    def _on_watched_dir_changed(self, _monitor, changed, _other, event) -> None:
+        if not self._watch_active:
+            return
+        if event in CONTENT_EVENTS and changed.get_basename() not in WATCHED_FILE_NAMES:
+            return
+        self._schedule_worlds_check()
+
+    def _watched_dirs(self) -> list[Path]:
+        root = self._server_dir()
+        if not root:
+            return []
+        dirs = [root]
+        try:
+            bedrock_root = root / BEDROCK_WORLDS_DIR
+            if bedrock_root.is_dir():
+                dirs.append(bedrock_root)
+            for world in _world_dirs(root):
+                dirs.append(world)
+                dimensions = world / "dimensions"
+                if dimensions.is_dir():
+                    dirs.append(dimensions)
+                    dirs.extend(item for item in dimensions.iterdir() if item.is_dir())
+        except OSError:
+            pass
+        return dirs
+
+    def _sync_dir_monitors(self) -> None:
+        wanted = {str(path) for path in self._watched_dirs()}
+        for key in [key for key in self._watch_monitors if key not in wanted]:
+            self._watch_monitors.pop(key).cancel()
+        for key in wanted:
+            if key in self._watch_monitors:
+                continue
+            try:
+                monitor = Gio.File.new_for_path(key).monitor_directory(Gio.FileMonitorFlags.NONE, None)
+            except Exception:
+                continue
+            monitor.connect("changed", self._on_watched_dir_changed)
+            self._watch_monitors[key] = monitor
+
+    def _on_remote_watch_due(self) -> bool:
+        if not self._watch_active:
+            self._watch_poll_id = 0
+            return False
+        if not self._watch_busy:
+            self._start_remote_worlds_check()
+        return True
+
+    def _start_remote_worlds_check(self) -> None:
+        root = self._server_dir()
+        server_id = self._server_info.id if self._server_info else ""
+        generation = self._watch_generation
+        self._watch_busy = True
+
+        def worker() -> None:
+            result = None
+            try:
+                result = (self._build_worlds_snapshot(root), self._build_disabled_snapshot(server_id))
+            finally:
+                GLib.idle_add(self._finish_remote_worlds_check, generation, result)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_remote_worlds_check(self, generation: int, result) -> bool:
+        if generation != self._watch_generation:
+            return False
+        self._watch_busy = False
+        if result is None or not self._watch_active:
+            return False
+        snapshot, disabled_snapshot = result
+        if snapshot != self._worlds_snapshot or disabled_snapshot != self._disabled_snapshot:
+            self._rebuild_lists()
+        return False
 
     def _pop_to_root(self) -> None:
         if not self._root_page:
@@ -504,16 +646,15 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
             return
         self._backups_row.set_subtitle(_("{} backup(s)").format(count))
 
-    def _build_worlds_snapshot(self) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    def _build_worlds_snapshot(self, root=None) -> tuple[tuple[str, tuple[str, ...]], ...]:
         try:
-            return self._worlds_snapshot_now()
+            return self._worlds_snapshot_now(self._server_dir() if root is None else root)
         except Exception:
             # This runs on the once-a-second poll, so an unreachable machine raising
             # here would stop that timer for the whole window, not just this tab.
             return tuple()
 
-    def _worlds_snapshot_now(self) -> tuple[tuple[str, tuple[str, ...]], ...]:
-        root = self._server_dir()
+    def _worlds_snapshot_now(self, root) -> tuple[tuple[str, tuple[str, ...]], ...]:
         if not root or not root.is_dir():
             return tuple()
 
@@ -536,11 +677,13 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
 
         return tuple(snapshot)
 
-    def _build_disabled_snapshot(self) -> tuple[tuple[str, str, str], ...]:
-        if not self._server_manager or not self._server_info:
+    def _build_disabled_snapshot(self, server_id: str | None = None) -> tuple[tuple[str, str, str], ...]:
+        if server_id is None:
+            server_id = self._server_info.id if self._server_info else ""
+        if not self._server_manager or not server_id:
             return tuple()
         try:
-            data = self._server_manager.get_incompatible_components(self._server_info.id)
+            data = self._server_manager.get_incompatible_components(server_id)
         except Exception:
             return tuple()
         items: list[tuple[str, str, str]] = []

@@ -282,7 +282,6 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         return True
 
     def _poll_runtime_state(self):
-        self._detail_view.poll_runtime_state()
         # Cheap, and the only thing that catches an answer that arrived from a host
         # after the row that wanted it had already been built.
         self._sidebar.sync_rows()

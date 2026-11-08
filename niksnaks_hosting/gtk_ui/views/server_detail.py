@@ -312,10 +312,6 @@ class ServerDetailView(Gtk.Box):
                 self._files_view_server_id = self._current_server.id
             files.refresh_worlds_if_changed(force=True)
 
-    def poll_runtime_state(self) -> None:
-        if self._view_stack.get_visible_child_name() == "files":
-            self._ensure_files_view().refresh_worlds_if_changed()
-
     def _show_start_refusal(self, refusal: StartRefusal):
         if refusal.kind == "port":
             title = _("{} Port In Use").format(refusal.port_type)
