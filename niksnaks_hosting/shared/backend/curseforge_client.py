@@ -20,7 +20,7 @@ from niksnaks_hosting.shared.utils.constants import (
     neoforge_mc_version,
     normalize_loader,
 )
-from niksnaks_hosting.shared.utils.net import make_ssl_context
+from niksnaks_hosting.shared.utils.net import shared_ssl_context
 from niksnaks_hosting.shared.utils.storage import (
     free_bytes,
     human_size,
@@ -83,8 +83,6 @@ PRESERVED_PROPERTIES = frozenset(
         "max-players",
     }
 )
-
-_SSL_CONTEXT = make_ssl_context()
 
 
 @dataclass
@@ -183,7 +181,7 @@ def _request_json(path: str, params: dict[str, Any] | None = None, timeout: floa
             headers={"User-Agent": USER_AGENT, "Accept": "application/json", **extra_headers},
         )
         try:
-            with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CONTEXT) as resp:
+            with urllib.request.urlopen(req, timeout=timeout, context=shared_ssl_context()) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except Exception as e:
             last_error = e
@@ -355,7 +353,7 @@ def _download_to_file(
     """Stream a download to disk; pack archives run to hundreds of megabytes."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CONTEXT) as resp:
+    with urllib.request.urlopen(req, timeout=timeout, context=shared_ssl_context()) as resp:
         total = int(resp.headers.get("Content-Length") or 0)
         done = 0
         with dest.open("wb") as fh:

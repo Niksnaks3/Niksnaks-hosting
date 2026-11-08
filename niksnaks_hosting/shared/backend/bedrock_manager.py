@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import requests
-
 from niksnaks_hosting.shared.backend.config_manager import ConfigManager
 from niksnaks_hosting.shared.remote.paths import is_remote
 from niksnaks_hosting.shared.utils.constants import (
@@ -66,6 +64,8 @@ class BedrockManager:
         self._links: dict[str, str] | None = None
 
     def fetch_download_links(self, force: bool = False) -> dict[str, str]:
+        import requests
+
         if self._links is not None and not force:
             return dict(self._links)
 
@@ -124,6 +124,8 @@ class BedrockManager:
         option: BedrockVersionOption,
         progress_callback: Callable[[float, str], None] | None = None,
     ) -> str | None:
+
+        import requests
 
         cached_zip = CACHE_DIR / f"bedrock-server-{option.version}.zip"
         if cached_zip.exists() and cached_zip.stat().st_size > 1024 * 1024:

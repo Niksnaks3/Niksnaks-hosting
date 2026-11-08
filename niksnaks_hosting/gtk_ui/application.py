@@ -9,7 +9,6 @@ from pathlib import Path
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
-from niksnaks_hosting.gtk_ui.updater import AppUpdater
 from niksnaks_hosting.gtk_ui.window import NiksnaksHostingWindow
 from niksnaks_hosting.i18n import set_language, setup_gettext
 from niksnaks_hosting.shared.backend.server_manager import ServerManager
@@ -74,9 +73,6 @@ class NiksnaksHostingApplication(Adw.Application):
 
         # The web panel, when it is switched on, lives on the application rather than
         # the window: hiding the window into the background must not take it down.
-        from niksnaks_hosting.web.panel import WebPanel
-
-        self._web_panel = WebPanel(self._server_manager)
         self.apply_web_panel_settings()
 
         from niksnaks_hosting.shared.backend.scheduler import DailyScheduler
@@ -178,6 +174,8 @@ class NiksnaksHostingApplication(Adw.Application):
 
     def _start_updater(self):
         if self._updater is None:
+            from niksnaks_hosting.gtk_ui.updater import AppUpdater
+
             self._updater = AppUpdater(self, lambda: self._window)
             self._updater.start()
 
@@ -347,17 +345,26 @@ class NiksnaksHostingApplication(Adw.Application):
         from niksnaks_hosting.gtk_ui.dialogs.web_panel import show_web_panel_dialog
 
         if self._window:
-            show_web_panel_dialog(self._window, self, self._web_panel, self._server_manager)
+            show_web_panel_dialog(self._window, self, self._ensure_web_panel(), self._server_manager)
+
+    def _ensure_web_panel(self):
+        if self._web_panel is None:
+            from niksnaks_hosting.web.panel import WebPanel
+
+            self._web_panel = WebPanel(self._server_manager)
+        return self._web_panel
 
     def apply_web_panel_settings(self) -> str:
         """Start, move or stop the web panel to match the preferences. Returns a problem, or ''."""
         prefs = self._server_manager.preferences
         if not prefs.web_panel_enabled:
-            self._web_panel.stop()
+            if self._web_panel is not None:
+                self._web_panel.stop()
             return ""
-        if self._web_panel.is_running and self._web_panel.port == prefs.web_panel_port:
+        panel = self._ensure_web_panel()
+        if panel.is_running and panel.port == prefs.web_panel_port:
             return ""
-        ok, message = self._web_panel.start(prefs.web_panel_port)
+        ok, message = panel.start(prefs.web_panel_port)
         return "" if ok else message
 
     def _on_hosts(self, action, param):

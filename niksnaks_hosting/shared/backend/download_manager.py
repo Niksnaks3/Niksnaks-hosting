@@ -5,8 +5,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-import requests
-
 from niksnaks_hosting.shared.utils.constants import (
     CACHE_DIR,
     FABRIC_GAME_VERSIONS_URL,
@@ -71,6 +69,8 @@ def _forge_build_sort_key(build: str) -> tuple[int, ...]:
 
 def _maven_versions(url: str, label: str) -> list[str]:
     """Every version listed in a maven-metadata.xml, in the order the repository gives them."""
+    import requests
+
     try:
         resp = requests.get(url, timeout=20)
         resp.raise_for_status()
@@ -100,6 +100,8 @@ class DownloadManager:
         return [v["version"] for v in entries if include_snapshots or v.get("stable", False)]
 
     def _fetch_game_version_entries(self) -> list[dict]:
+        import requests
+
         now = time.monotonic()
         if self._game_versions and now - self._game_versions_fetched_at < GAME_VERSIONS_TTL_SECONDS:
             return self._game_versions
@@ -118,6 +120,8 @@ class DownloadManager:
         return self._game_versions
 
     def fetch_loader_versions(self) -> list[str]:
+        import requests
+
         try:
             resp = requests.get(FABRIC_LOADER_VERSIONS_URL, timeout=15)
             resp.raise_for_status()
@@ -128,6 +132,8 @@ class DownloadManager:
             return []
 
     def fetch_fabric_loader_versions(self, mc_version: str) -> list[tuple[str, bool]]:
+
+        import requests
 
         mc_version = str(mc_version or "").strip()
         if not mc_version:
@@ -154,6 +160,8 @@ class DownloadManager:
         return list(entries)
 
     def fetch_installer_info(self) -> tuple[str | None, str | None]:
+        import requests
+
         try:
             resp = requests.get(FABRIC_INSTALLER_VERSIONS_URL, timeout=15)
             resp.raise_for_status()
@@ -170,6 +178,8 @@ class DownloadManager:
         return None, None
 
     def download_installer(self, progress_callback: Callable[[float, str], None] | None = None) -> str | None:
+        import requests
+
         url, version = self.fetch_installer_info()
         if not url:
             return None
@@ -209,6 +219,8 @@ class DownloadManager:
             return None
 
     def _fetch_mojang_manifest(self) -> dict | None:
+        import requests
+
         if self._mojang_manifest:
             return self._mojang_manifest
         try:
@@ -232,6 +244,8 @@ class DownloadManager:
     def download_server_jar(
         self, mc_version: str, server_dir: str, progress_callback: Callable[[float, str], None] | None = None
     ) -> tuple[bool, str]:
+
+        import requests
 
         dest = Path(server_dir) / "server.jar"
 
@@ -470,6 +484,8 @@ class DownloadManager:
         )
 
     def _fetch_forge_promotions(self) -> dict[str, str]:
+        import requests
+
         if self._forge_promotions is not None:
             return self._forge_promotions
         try:
@@ -563,6 +579,8 @@ class DownloadManager:
         loader_name: str,
         progress_callback: Callable[[float, str], None] | None = None,
     ) -> str | None:
+
+        import requests
 
         if cached_jar.exists():
             if progress_callback:

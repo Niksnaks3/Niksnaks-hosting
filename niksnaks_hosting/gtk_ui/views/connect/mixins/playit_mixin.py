@@ -11,8 +11,6 @@ gi.require_version("Adw", "1")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Adw, Gdk, GLib
 
-from niksnaks_hosting.gtk_ui.dialogs.manage_playit_tunnel import ManagePlayitTunnelDialog
-from niksnaks_hosting.gtk_ui.dialogs.playit_setup import PlayitSetupDialog
 from niksnaks_hosting.shared.backend.playit_config import load_playit_config, save_playit_config
 from niksnaks_hosting.shared.utils.constants import (
     BEDROCK_DEFAULT_PORT,
@@ -485,6 +483,8 @@ class PlayitMixin:
         if not self._server_manager or not self._server_info:
             return
 
+        from niksnaks_hosting.gtk_ui.dialogs.playit_setup import PlayitSetupDialog
+
         dialog = PlayitSetupDialog(
             self._server_manager,
             self._server_info,
@@ -635,6 +635,8 @@ class PlayitMixin:
 
                 threading.Thread(target=run, daemon=True).start()
 
+            from niksnaks_hosting.gtk_ui.dialogs.manage_playit_tunnel import ManagePlayitTunnelDialog
+
             dialog = ManagePlayitTunnelDialog(
                 "Java", _("Minecraft Java (TCP)"), server_port, str(self._cfg.get("java_endpoint", "")).strip()
             )
@@ -750,6 +752,8 @@ class PlayitMixin:
                     GLib.idle_add(ui_done)
 
                 threading.Thread(target=run, daemon=True).start()
+
+            from niksnaks_hosting.gtk_ui.dialogs.manage_playit_tunnel import ManagePlayitTunnelDialog
 
             dialog = ManagePlayitTunnelDialog(
                 "Bedrock", _("Minecraft Bedrock (UDP)"), br_port, str(self._cfg.get("bedrock_endpoint", "")).strip()
@@ -885,6 +889,8 @@ class PlayitMixin:
                     GLib.idle_add(ui_done)
 
                 threading.Thread(target=run, daemon=True).start()
+
+            from niksnaks_hosting.gtk_ui.dialogs.manage_playit_tunnel import ManagePlayitTunnelDialog
 
             dialog = ManagePlayitTunnelDialog(
                 "Voice Chat",

@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import gi
 
 gi.require_version("Gtk", "4.0")
@@ -7,12 +11,14 @@ from gi.repository import Adw, GLib, Gtk
 
 from niksnaks_hosting.gtk_ui.views.connect import ConnectView
 from niksnaks_hosting.gtk_ui.views.console_view import ConsoleView
-from niksnaks_hosting.gtk_ui.views.files import FilesView
-from niksnaks_hosting.gtk_ui.views.performance_view import PerformanceView
-from niksnaks_hosting.gtk_ui.views.properties_view import PropertiesView
 from niksnaks_hosting.shared.backend.server_manager import ServerInfo, ServerManager, StartRefusal
 from niksnaks_hosting.shared.backend.server_process import ServerProcess
 from niksnaks_hosting.shared.utils.constants import ServerStatus
+
+if TYPE_CHECKING:
+    from niksnaks_hosting.gtk_ui.views.files import FilesView
+    from niksnaks_hosting.gtk_ui.views.performance_view import PerformanceView
+    from niksnaks_hosting.gtk_ui.views.properties_view import PropertiesView
 
 class ServerDetailView(Gtk.Box):
     def __init__(self, server_manager: ServerManager, toast_overlay=None):
@@ -126,6 +132,8 @@ class ServerDetailView(Gtk.Box):
 
     def _ensure_perf_view(self) -> PerformanceView:
         if self._perf_view is None:
+            from niksnaks_hosting.gtk_ui.views.performance_view import PerformanceView
+
             self._perf_view = PerformanceView()
             self._tab_hosts["performance"].append(self._perf_view)
             if self._current_server:
@@ -135,6 +143,8 @@ class ServerDetailView(Gtk.Box):
 
     def _ensure_props_view(self) -> PropertiesView:
         if self._props_view is None:
+            from niksnaks_hosting.gtk_ui.views.properties_view import PropertiesView
+
             self._props_view = PropertiesView(toast_overlay=self._toast_overlay)
             self._tab_hosts["properties"].append(self._props_view)
             if self._current_server:
@@ -144,6 +154,8 @@ class ServerDetailView(Gtk.Box):
 
     def _ensure_files_view(self) -> FilesView:
         if self._files_view is None:
+            from niksnaks_hosting.gtk_ui.views.files import FilesView
+
             self._files_view = FilesView()
             self._files_view._push_fullscreen_page_cb = self._push_fullscreen_page
             self._tab_hosts["files"].append(self._files_view)

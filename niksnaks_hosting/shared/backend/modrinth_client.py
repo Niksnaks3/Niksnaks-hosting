@@ -13,12 +13,10 @@ from pathlib import Path
 from typing import Any
 
 from niksnaks_hosting.shared.utils.constants import APP_VERSION, is_pack_protected_icon
-from niksnaks_hosting.shared.utils.net import make_ssl_context
+from niksnaks_hosting.shared.utils.net import shared_ssl_context
 
 USER_AGENT = f"Niksnaks-Hosting/{APP_VERSION}"
 API = "https://api.modrinth.com/v2"
-
-_SSL_CONTEXT = make_ssl_context()
 
 @dataclass
 class ModrinthHit:
@@ -75,7 +73,7 @@ def _request_json(url: str, timeout: float = 30.0) -> Any:
         url,
         headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CONTEXT) as resp:
+    with urllib.request.urlopen(req, timeout=timeout, context=shared_ssl_context()) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 def _pick_primary_file(files: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -97,7 +95,7 @@ def _pick_mrpack_file(files: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 def _download_bytes(url: str, timeout: float = 120.0) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CONTEXT) as resp:
+    with urllib.request.urlopen(req, timeout=timeout, context=shared_ssl_context()) as resp:
         return resp.read()
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -397,7 +395,7 @@ def download_to(
     # place once the download has finished.
     part = dest.with_name(dest.name + ".part")
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CONTEXT) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=shared_ssl_context()) as resp:
             total = int(resp.headers.get("Content-Length") or 0)
             done = 0
             with part.open("wb") as fh:

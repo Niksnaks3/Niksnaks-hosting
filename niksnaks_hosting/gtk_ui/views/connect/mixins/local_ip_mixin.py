@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import socket
+import threading
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("Gdk", "4.0")
-from gi.repository import Adw, Gdk, Gtk
+from gi.repository import Adw, Gdk, GLib, Gtk
 
 from niksnaks_hosting.shared.utils.constants import DEFAULT_SERVER_PORT, is_bedrock
 
@@ -76,12 +77,18 @@ class LocalIpMixin:
         return port if port != DEFAULT_SERVER_PORT else None
 
     def _refresh_local_ip_row(self):
-        ip = self._get_local_ip()
+        def worker() -> None:
+            GLib.idle_add(self._show_local_ip, self._get_local_ip())
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_local_ip(self, ip: str) -> bool:
         self._local_ip_value = ip
         port = self._local_connect_port()
         subtitle = _("{} · port {}").format(ip, port) if port else ip
         for row in self._local_ip_rows:
             row.set_subtitle(subtitle)
+        return False
 
     def _on_copy_local_ip(self, *_args):
         ip = self._local_ip_value.strip()

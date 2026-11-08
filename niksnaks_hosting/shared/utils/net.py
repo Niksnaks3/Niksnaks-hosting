@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import ssl
 import sys
+import threading
 
-__all__ = ["make_ssl_context"]
+__all__ = ["make_ssl_context", "shared_ssl_context"]
+
+_shared_context: ssl.SSLContext | None = None
+_shared_context_lock = threading.Lock()
 
 def _windows_store_pems() -> list[str]:
     pems: list[str] = []
@@ -42,3 +46,10 @@ def make_ssl_context() -> ssl.SSLContext:
             return context
 
     return ssl.create_default_context()
+
+def shared_ssl_context() -> ssl.SSLContext:
+    global _shared_context
+    with _shared_context_lock:
+        if _shared_context is None:
+            _shared_context = make_ssl_context()
+        return _shared_context

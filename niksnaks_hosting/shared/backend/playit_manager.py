@@ -9,18 +9,13 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.request
 from datetime import datetime as dt
 from pathlib import Path
 
-import requests
-
 from niksnaks_hosting.shared.core.events import EventEmitter
 from niksnaks_hosting.shared.utils.constants import BEDROCK_SERVER_BINARY, DATA_DIR
-from niksnaks_hosting.shared.utils.net import make_ssl_context
+from niksnaks_hosting.shared.utils.net import shared_ssl_context
 from niksnaks_hosting.shared.utils.subprocess_utils import hidden_subprocess_kwargs
-
-_SSL_CONTEXT = make_ssl_context()
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 ENDPOINT_URL_RE = re.compile(r"(?:tcp|udp)://([A-Za-z0-9.-]+:\d{2,5})")
@@ -171,7 +166,8 @@ class PlayitManager(EventEmitter):
         self.tunnel_cache = self.TunnelCacheHelper(self.directory)
         self.config: dict[str, str] = {}
 
-        self.session = requests.Session()
+        self._session = None
+        self._session_lock = threading.Lock()
         self.agent_name = f"niksnaks-hosting ({platform.node()})"
         self.agent_web_url = ""
         self.max_tunnels = 4
@@ -254,7 +250,18 @@ class PlayitManager(EventEmitter):
     def _emit_endpoint_changed(self, server_id: str = ""):
         self.emit_on_main_thread("endpoint-changed", self.public_endpoint, self._claim_url)
 
+    @property
+    def session(self):
+        with self._session_lock:
+            if self._session is None:
+                import requests
+
+                self._session = requests.Session()
+            return self._session
+
     def _request(self, endpoint: str, **kwargs) -> dict:
+        import requests
+
         url = f"{self._api_base}/{endpoint.strip('/')}"
         try:
             response = self.session.post(url, timeout=20, **kwargs)
@@ -421,13 +428,15 @@ class PlayitManager(EventEmitter):
         return 0, 17, 1
 
     def _download_specific_version(self, version_tag: str) -> tuple[bool, str]:
+        import urllib.request
+
         try:
             release_url = f"https://api.github.com/repos/playit-cloud/playit-agent/releases/tags/{version_tag}"
             req = urllib.request.Request(
                 release_url,
                 headers={"User-Agent": "Niksnaks-Hosting/1.0", "Accept": "application/vnd.github+json"},
             )
-            with urllib.request.urlopen(req, timeout=20.0, context=_SSL_CONTEXT) as resp:
+            with urllib.request.urlopen(req, timeout=20.0, context=shared_ssl_context()) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
 
             assets = data.get("assets") or []
@@ -446,7 +455,7 @@ class PlayitManager(EventEmitter):
             target.parent.mkdir(parents=True, exist_ok=True)
 
             req_bin = urllib.request.Request(download_url, headers={"User-Agent": "Niksnaks-Hosting/1.0"})
-            with urllib.request.urlopen(req_bin, timeout=120.0, context=_SSL_CONTEXT) as resp:
+            with urllib.request.urlopen(req_bin, timeout=120.0, context=shared_ssl_context()) as resp:
                 payload = resp.read()
 
             with open(target, "wb") as f:
@@ -544,6 +553,8 @@ class PlayitManager(EventEmitter):
         return bool(self._proto_key)
 
     def link_account(self, setup_code: str, timeout: int = 20) -> tuple[bool, str]:
+        import requests
+
         code = str(setup_code or "").strip()
         if not code:
             return False, _("Missing playit setup code")

@@ -6,7 +6,6 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gio, GLib, GObject, Gtk
 
-from niksnaks_hosting.gtk_ui.dialogs.progress_dialog import ProgressDialog
 from niksnaks_hosting.gtk_ui.views.server_detail import ServerDetailView
 from niksnaks_hosting.gtk_ui.views.sidebar import Sidebar
 from niksnaks_hosting.gtk_ui.views.welcome_view import WelcomeView
@@ -210,6 +209,8 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         # dialog on a hidden window is indistinguishable from an app that will not die.
         self.set_visible(True)
         self.present()
+
+        from niksnaks_hosting.gtk_ui.dialogs.progress_dialog import ProgressDialog
 
         progress = ProgressDialog(
             _("Stopping servers"),

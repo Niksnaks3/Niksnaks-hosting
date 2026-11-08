@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import io
 
-from PIL import Image
-
 try:
     import gi
 
@@ -23,6 +21,8 @@ except Exception:
     Gtk = None
 
 def convert_to_png(input_path: str, output_path: str, size: int = 128, crop_box: tuple = None) -> str:
+    from PIL import Image
+
     img = Image.open(input_path)
     img = img.convert("RGBA")
 
@@ -48,6 +48,8 @@ def png_bytes(source_path: str, size: int = 128) -> bytes:
     computer: PIL can only write to this machine's disk, but bytes go anywhere a path
     object can put them.
     """
+    from PIL import Image
+
     img = Image.open(source_path).convert("RGBA")
     width, height = img.size
     side = min(width, height)

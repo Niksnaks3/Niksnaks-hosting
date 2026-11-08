@@ -8,8 +8,6 @@ import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
-import requests
-
 from niksnaks_hosting.shared.utils.constants import JRES_DIR, get_adoptium_jre_download_info, get_required_java_version
 from niksnaks_hosting.shared.utils.subprocess_utils import hidden_subprocess_kwargs
 
@@ -106,6 +104,8 @@ class JavaManager:
         return thread
 
     def _download_jre_thread(self, java_version: int, progress_callback, done_callback):
+        import requests
+
         try:
             url, archive_type = get_adoptium_jre_download_info(java_version)
             jre_dir = JRES_DIR / f"jre-{java_version}"

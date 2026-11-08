@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 import threading
-import urllib.parse
-import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -14,11 +12,9 @@ gi.require_version("Adw", "1")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Adw, GLib, Gtk
 
-from niksnaks_hosting.shared.utils.net import make_ssl_context
+from niksnaks_hosting.shared.utils.net import shared_ssl_context
 
 PLAYIT_DASHBOARD_URL = "https://playit.gg/account/tunnels"
-
-_SSL_CONTEXT = make_ssl_context()
 
 from ..utils import *
 
@@ -228,13 +224,16 @@ class PlayersMixin:
         return f"{raw[0:8]}-{raw[8:12]}-{raw[12:16]}-{raw[16:20]}-{raw[20:32]}"
 
     def _resolve_profile(self, name: str) -> tuple[str, str]:
+        import urllib.parse
+        import urllib.request
+
         try:
             quoted = urllib.parse.quote(name)
             req = urllib.request.Request(
                 f"https://api.mojang.com/users/profiles/minecraft/{quoted}",
                 headers={"User-Agent": "Niksnaks-Hosting/1.0"},
             )
-            with urllib.request.urlopen(req, timeout=8.0, context=_SSL_CONTEXT) as resp:
+            with urllib.request.urlopen(req, timeout=8.0, context=shared_ssl_context()) as resp:
                 if resp.status == 204:
                     return name, ""
                 data = json.loads(resp.read().decode("utf-8"))

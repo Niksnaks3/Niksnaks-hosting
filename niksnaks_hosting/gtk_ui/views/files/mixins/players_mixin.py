@@ -15,11 +15,9 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Adw, GLib, Gtk
 
-from niksnaks_hosting.shared.utils.net import make_ssl_context
+from niksnaks_hosting.shared.utils.net import shared_ssl_context
 
 from ..utils import *
-
-_SSL_CONTEXT = make_ssl_context()
 
 class PlayersMixin:
     def _build_players_page(self, show_controls: bool = False) -> Gtk.Widget:
@@ -174,7 +172,7 @@ class PlayersMixin:
                 f"https://api.mojang.com/users/profiles/minecraft/{quoted}",
                 headers={"User-Agent": "Niksnaks-Hosting/1.0"},
             )
-            with urllib.request.urlopen(req, timeout=8.0, context=_SSL_CONTEXT) as resp:
+            with urllib.request.urlopen(req, timeout=8.0, context=shared_ssl_context()) as resp:
                 if resp.status == 204:
                     return name, ""
                 data = json.loads(resp.read().decode("utf-8"))
