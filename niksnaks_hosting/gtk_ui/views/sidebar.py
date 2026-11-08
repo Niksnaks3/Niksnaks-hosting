@@ -161,6 +161,14 @@ class ServerRow(Adw.ActionRow):
         self.set_tooltip_text(server_info.mc_version)
         self._update_icon()
 
+    def needs_sync(self) -> bool:
+        process = self._server_manager.get_existing_process(self.server_info.id)
+        if process is not self._process:
+            return True
+        if not self.server_info.is_remote:
+            return False
+        return process is None or getattr(process, "first_answer_pending", False)
+
     def refresh(self):
         """Catch up with a process that appeared, or an answer that arrived, since.
 
@@ -315,6 +323,9 @@ class Sidebar(Gtk.Box):
         """Bring every row up to date with what its server turned out to be doing."""
         for row in self._rows.values():
             row.refresh()
+
+    def needs_sync(self) -> bool:
+        return any(row.needs_sync() for row in self._rows.values())
 
     def select_server(self, server_id: str):
         row = self._rows.get(server_id)

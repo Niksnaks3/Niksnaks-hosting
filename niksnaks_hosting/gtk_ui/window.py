@@ -20,6 +20,8 @@ from niksnaks_hosting.shared.utils.constants import APP_ID
 # host that has gone away.
 STATE_REFRESH_SECONDS = 20
 
+SAFETY_SYNC_TICKS = 5
+
 class NiksnaksHostingWindow(Adw.ApplicationWindow):
     def __init__(self, server_manager: ServerManager, **kwargs):
         super().__init__(**kwargs)
@@ -33,6 +35,8 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         # Last status handed to the portal or tray, so the once-a-second poll only pays
         # for a DBus round trip when the text actually changed.
         self._background_status: str = ""
+        self._process_handlers: dict[str, tuple] = {}
+        self._safety_ticks = SAFETY_SYNC_TICKS - 1
 
         self.set_title(_("Niksnaks-Hosting"))
         try:
@@ -105,6 +109,7 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         server_manager.connect("server-removed", self._on_server_removed)
         server_manager.connect("daily-task-done", self._on_daily_task_done)
 
+        self._watch_processes()
         self._status_poll_id = GLib.timeout_add(1000, self._poll_runtime_state)
 
         # A server keeps running while this app is closed and can be started from
@@ -251,12 +256,15 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
                 self._split_view.set_show_sidebar(False)
 
     def _on_server_added(self, manager, server_id):
-        pass
+        if self._watch_processes():
+            self._sync_running_state()
 
     def _on_server_removed(self, manager, server_id):
         if self._current_server_id == server_id or not self._server_manager.servers:
             self._current_server_id = None
             self._content_stack.set_visible_child_name("welcome")
+        self._forget_process(server_id)
+        self._sync_running_state()
 
     def _on_daily_task_done(self, manager, server_id, ok, message):
         info = manager.get_server(server_id)
@@ -276,16 +284,56 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         if self._state_poll_id:
             GLib.source_remove(self._state_poll_id)
             self._state_poll_id = None
+        for server_id in list(self._process_handlers):
+            self._forget_process(server_id)
 
     def _poll_server_states(self):
         self._server_manager.refresh_server_states()
         return True
 
-    def _poll_runtime_state(self):
-        # Cheap, and the only thing that catches an answer that arrived from a host
-        # after the row that wanted it had already been built.
-        self._sidebar.sync_rows()
+    def _watch_processes(self) -> bool:
+        connected = False
+        for info in self._server_manager.servers:
+            process = self._server_manager.get_existing_process(info.id)
+            known = self._process_handlers.get(info.id)
+            if known is not None and known[0] is process:
+                continue
+            self._forget_process(info.id)
+            if process is not None:
+                handler_id = process.connect("status-changed", self._on_process_status_changed)
+                self._process_handlers[info.id] = (process, handler_id)
+                connected = True
+        return connected
 
+    def _forget_process(self, server_id: str) -> None:
+        known = self._process_handlers.pop(server_id, None)
+        if known is not None:
+            known[0].disconnect(known[1])
+
+    def _on_process_status_changed(self, _process, _status):
+        self._sync_running_state()
+
+    def _poll_runtime_state(self):
+        if self._watch_processes():
+            self._sync_running_state()
+
+        self._safety_ticks += 1
+        if self._safety_ticks >= SAFETY_SYNC_TICKS:
+            self._safety_ticks = 0
+            # Cheap, and the only thing that catches an answer that arrived from a host
+            # after the row that wanted it had already been built.
+            self._sidebar.sync_rows()
+            self._sync_running_state()
+        elif self._sidebar.needs_sync():
+            self._sidebar.sync_rows()
+
+        if not self._shutdown_in_progress:
+            for sid in list(self._running_server_ids):
+                self._apply_playit_runtime(sid, None)
+
+        return True
+
+    def _sync_running_state(self) -> None:
         current_ids = set(self._server_manager.get_running_server_ids())
         previous_ids = self._running_server_ids
         self._running_server_ids = current_ids
@@ -294,7 +342,7 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         # poll react to the same servers going down would run a second backup alongside it,
         # into the same folder, from another thread.
         if self._shutdown_in_progress:
-            return True
+            return
 
         if current_ids:
             self._set_background_status(_("{} server(s) running").format(len(current_ids)))
@@ -311,11 +359,6 @@ class NiksnaksHostingWindow(Adw.ApplicationWindow):
         started_ids = current_ids - previous_ids
         for sid in started_ids:
             self._apply_playit_runtime(sid, "start")
-
-        for sid in current_ids:
-            self._apply_playit_runtime(sid, None)
-
-        return True
 
     def _set_background_status(self, message: str) -> None:
         if message == self._background_status:

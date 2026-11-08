@@ -95,6 +95,7 @@ class RemoteServerProcess(ServerProcess):
         # showing a server as switched off when it has simply lost sight of it.
         self.host_unreachable = False
         self._unreachable_said = ""
+        self.first_answer_pending = True
 
     # ------------------------------------------------------------------ identity
     @property
@@ -631,6 +632,7 @@ class RemoteServerProcess(ServerProcess):
         try:
             self._adopt_running_state(pid)
         finally:
+            self.first_answer_pending = False
             self._adopt_lock.release()
 
     def _adopt_running_state(self, pid: int | None = None) -> None:
