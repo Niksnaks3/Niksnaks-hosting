@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import threading
 import uuid
@@ -307,9 +308,22 @@ class FilesView(Gtk.Box, BackupsMixin, ModsMixin, PlayersMixin, ModrinthMixin, C
     def _on_watched_dir_changed(self, _monitor, changed, _other, event) -> None:
         if not self._watch_active:
             return
-        if event in CONTENT_EVENTS and changed.get_basename() not in WATCHED_FILE_NAMES:
-            return
+        if event in CONTENT_EVENTS:
+            if changed.get_basename() not in WATCHED_FILE_NAMES:
+                return
+        else:
+            self._forget_dir_monitors(changed.get_path())
         self._schedule_worlds_check()
+
+    def _forget_dir_monitors(self, path: str | None) -> None:
+        if not path:
+            return
+        target = os.path.normcase(path)
+        below = target + os.sep
+        for key in list(self._watch_monitors):
+            name = os.path.normcase(key)
+            if name == target or name.startswith(below):
+                self._watch_monitors.pop(key).cancel()
 
     def _watched_dirs(self) -> list[Path]:
         root = self._server_dir()
